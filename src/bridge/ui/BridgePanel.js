@@ -28,6 +28,7 @@ export class BridgePanel {
         this.renderStatus();
         this.renderStats();
         this.renderMapping();
+        this.renderHelp();
     }
 
     createUI() {
@@ -75,6 +76,26 @@ export class BridgePanel {
                 </div>
 
                 <div class="bridge-mapping"></div>
+
+                <div class="bridge-help-section">
+                    <button type="button" class="bridge-help-toggle" data-bridge-action="help">
+                        <span class="bridge-caret">▸</span>
+                        <span data-i18n="bridgeHelp">How to use</span>
+                    </button>
+                    <div class="bridge-help" hidden>
+                        <ol class="bridge-steps">
+                            <li data-i18n="bridgeHelpStep1"></li>
+                            <li data-i18n="bridgeHelpStep2"></li>
+                            <li data-i18n="bridgeHelpStep3"></li>
+                        </ol>
+                        <div class="bridge-code-head">
+                            <span>bridge.py</span>
+                            <button type="button" class="bridge-copy" data-bridge-action="copy"></button>
+                        </div>
+                        <pre class="bridge-code"><code></code></pre>
+                        <p class="bridge-help-note" data-i18n="bridgeHelpNote"></p>
+                    </div>
+                </div>
             </div>
         `;
         host.appendChild(this.root);
@@ -86,6 +107,10 @@ export class BridgePanel {
         this.statusText = this.root.querySelector('.bridge-status-text');
         this.statusDot = this.root.querySelector('.bridge-dot');
         this.mappingBox = this.root.querySelector('.bridge-mapping');
+        this.helpBox = this.root.querySelector('.bridge-help');
+        this.helpToggle = this.root.querySelector('.bridge-help-toggle');
+        this.codeBox = this.root.querySelector('.bridge-code code');
+        this.copyButton = this.root.querySelector('.bridge-copy');
 
         this.panelManager?.registerPanel('floating-bridge-panel');
         window.i18n?.updatePageLanguage();
@@ -104,6 +129,58 @@ export class BridgePanel {
             this.bridge.autoReconnect = this.autoReconnectInput.checked;
             this.saveSettings();
         });
+
+        this.helpToggle.addEventListener('click', () => {
+            this.helpOpen = !this.helpOpen;
+            this.renderHelp();
+            this.saveSettings();
+        });
+        this.copyButton.addEventListener('click', () => this.copySnippet());
+    }
+
+    /**
+     * The example server, pre-filled with the address this page is served from -
+     * the Origin check only works if it matches, and a hand-edited constant is
+     * the easiest thing to get wrong.
+     */
+    snippet() {
+        return `# pip install "websockets>=14"
+import asyncio, json, math, struct, websockets
+
+ORIGINS = {"${location.origin}"}  # ${this.t('bridgeSnippetOrigin', 'this page; must be checked')}
+
+async def handler(ws):
+    if ws.request.headers.get("Origin") not in ORIGINS:
+        return await ws.close(1008)
+    await ws.send(json.dumps({"type": "hello", "joints": []}))
+    joints = json.loads(await ws.recv())["joints"]  # ${this.t('bridgeSnippetJoints', 'joints of the loaded model')}
+    await ws.send(json.dumps({"type": "hello", "joints": joints}))
+    t = 0.0
+    while True:
+        values = [0.5 * math.sin(t + i) for i in range(len(joints))]  # ${this.t('bridgeSnippetValues', 'replace with real data')}
+        await ws.send(struct.pack(f"<{len(joints)}f", *values))
+        t += 0.02
+        await asyncio.sleep(0.02)
+
+async def main():
+    async with websockets.serve(handler, "127.0.0.1", 9090):
+        await asyncio.Future()
+
+asyncio.run(main())`;
+    }
+
+    async copySnippet() {
+        try {
+            await navigator.clipboard.writeText(this.snippet());
+            this.copyButton.textContent = this.t('bridgeCopied', 'Copied');
+        } catch {
+            // Clipboard access can be denied; selecting the block still works.
+            this.copyButton.textContent = this.t('bridgeCopyFailed', 'Press Ctrl/Cmd+C');
+        }
+        clearTimeout(this.copyResetTimer);
+        this.copyResetTimer = setTimeout(() => {
+            this.copyButton.textContent = this.t('bridgeCopy', 'Copy');
+        }, 1600);
     }
 
     toggleConnection() {
@@ -148,6 +225,13 @@ export class BridgePanel {
         this.root.querySelector('.bridge-dropped').textContent = dropped;
     }
 
+    renderHelp() {
+        this.helpBox.hidden = !this.helpOpen;
+        this.helpToggle.querySelector('.bridge-caret').textContent = this.helpOpen ? '▾' : '▸';
+        this.codeBox.textContent = this.snippet();
+        this.copyButton.textContent = this.t('bridgeCopy', 'Copy');
+    }
+
     renderMapping() {
         const { matched, unknown, undriven, total } = this.bridge.mapping;
         if (!this.bridge.remoteJoints.length) {
@@ -184,7 +268,8 @@ export class BridgePanel {
         try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify({
                 url: this.urlInput.value.trim(),
-                autoReconnect: this.autoReconnectInput.checked
+                autoReconnect: this.autoReconnectInput.checked,
+                helpOpen: this.helpOpen
             }));
         } catch {
             // Private browsing or a full quota - the panel still works, it just forgets.
@@ -200,6 +285,9 @@ export class BridgePanel {
         }
         this.urlInput.value = saved.url || BRIDGE_DEFAULT_URL;
         this.autoReconnectInput.checked = saved.autoReconnect !== false;
+        // Expanded until the user collapses it, so the setup steps are the first
+        // thing a newcomer sees rather than something they have to go looking for.
+        this.helpOpen = saved.helpOpen !== false;
         this.bridge.autoReconnect = this.autoReconnectInput.checked;
     }
 
@@ -207,5 +295,6 @@ export class BridgePanel {
     refreshLanguage() {
         this.renderStatus();
         this.renderMapping();
+        this.renderHelp();
     }
 }

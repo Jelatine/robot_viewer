@@ -53,6 +53,17 @@ export const translations = {
         'bridgeUnknown': '模型中不存在',
         'bridgeUndriven': '未被驱动',
         'bridgeAwaitingHello': '等待服务端声明关节列表。',
+        'bridgeHelp': '使用帮助',
+        'bridgeHelpStep1': '安装依赖：<code>pip install "websockets&gt;=14"</code>',
+        'bridgeHelpStep2': '把下面的代码存为 <code>bridge.py</code>，运行 <code>python bridge.py</code>',
+        'bridgeHelpStep3': '加载机器人模型，然后点上面的「连接」',
+        'bridgeHelpNote': '示例把模型的所有关节按正弦驱动。接真实数据只需替换 values 那一行。旋转关节用弧度，平移关节用米。',
+        'bridgeCopy': '复制',
+        'bridgeCopied': '已复制',
+        'bridgeCopyFailed': '请手动复制',
+        'bridgeSnippetOrigin': '本页地址，必须校验，否则任何网页都能连上来',
+        'bridgeSnippetJoints': '页面回报的模型关节',
+        'bridgeSnippetValues': '换成真实数据',
 
         // 动画编辑器
         'autoKey': '自动关键帧',
@@ -255,6 +266,17 @@ export const translations = {
         'bridgeUnknown': 'Not in model',
         'bridgeUndriven': 'Not streamed',
         'bridgeAwaitingHello': 'Waiting for the server to declare its joints.',
+        'bridgeHelp': 'How to use',
+        'bridgeHelpStep1': 'Install the dependency: <code>pip install "websockets&gt;=14"</code>',
+        'bridgeHelpStep2': 'Save the code below as <code>bridge.py</code> and run <code>python bridge.py</code>',
+        'bridgeHelpStep3': 'Load a robot model, then hit Connect above',
+        'bridgeHelpNote': 'The example drives every joint of the model with a sine wave. Swap the values line for real data. Rotational joints are radians, prismatic joints are metres.',
+        'bridgeCopy': 'Copy',
+        'bridgeCopied': 'Copied',
+        'bridgeCopyFailed': 'Copy manually',
+        'bridgeSnippetOrigin': 'this page; must be checked or any site could connect',
+        'bridgeSnippetJoints': 'joints of the loaded model',
+        'bridgeSnippetValues': 'replace with real data',
 
         // Animation editor
         'autoKey': 'Auto Key',
@@ -473,7 +495,7 @@ class I18n {
                 element.placeholder = text;
             } else {
                 // 如果包含HTML标签（如<br>），使用innerHTML
-                if (text.includes('<br>') || text.includes('<strong>')) {
+                if (text.includes('<br>') || text.includes('<strong>') || text.includes('<code>')) {
                     element.innerHTML = text;
                 } else {
                     element.textContent = text;
