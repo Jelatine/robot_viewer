@@ -169,18 +169,76 @@ async def main():
 asyncio.run(main())`;
     }
 
+    /**
+     * navigator.clipboard exists only in a secure context, which rules out the
+     * two ordinary ways to run this viewer locally: opening the built page over
+     * file:// and reaching a dev server over a plain-http LAN address. Fall back
+     * to the legacy selection copy there, and if even that is refused, leave the
+     * snippet selected so Ctrl/Cmd+C finishes the job.
+     */
     async copySnippet() {
-        try {
-            await navigator.clipboard.writeText(this.snippet());
-            this.copyButton.textContent = this.t('bridgeCopied', 'Copied');
-        } catch {
-            // Clipboard access can be denied; selecting the block still works.
-            this.copyButton.textContent = this.t('bridgeCopyFailed', 'Press Ctrl/Cmd+C');
+        const text = this.snippet();
+        let copied = false;
+
+        if (navigator.clipboard?.writeText) {
+            try {
+                await navigator.clipboard.writeText(text);
+                copied = true;
+            } catch {
+                copied = false;   // denied, or the document lost focus
+            }
         }
+        if (!copied) copied = this.copyViaSelection(text);
+        if (!copied) this.selectSnippet();
+
+        this.copyButton.textContent = copied
+            ? this.t('bridgeCopied', 'Copied')
+            : this.t('bridgeCopyFailed', 'Press Ctrl/Cmd+C');
+
         clearTimeout(this.copyResetTimer);
         this.copyResetTimer = setTimeout(() => {
             this.copyButton.textContent = this.t('bridgeCopy', 'Copy');
         }, 1600);
+    }
+
+    /** document.execCommand('copy'), which works outside a secure context. */
+    copyViaSelection(text) {
+        const area = document.createElement('textarea');
+        area.value = text;
+        area.setAttribute('readonly', '');
+        // Off-screen but still selectable - display:none would leave nothing to copy.
+        area.style.cssText = 'position:fixed;top:0;left:-9999px;opacity:0;';
+        document.body.appendChild(area);
+
+        const selection = document.getSelection();
+        const previous = selection?.rangeCount > 0 ? selection.getRangeAt(0) : null;
+
+        area.select();
+        area.setSelectionRange(0, text.length);
+
+        let copied = false;
+        try {
+            copied = document.execCommand('copy');
+        } catch {
+            copied = false;
+        }
+
+        area.remove();
+        if (previous) {
+            selection.removeAllRanges();
+            selection.addRange(previous);
+        }
+        return copied;
+    }
+
+    /** Last resort: hand the user a ready-made selection to press Ctrl/Cmd+C on. */
+    selectSnippet() {
+        const selection = document.getSelection();
+        if (!selection) return;
+        const range = document.createRange();
+        range.selectNodeContents(this.codeBox);
+        selection.removeAllRanges();
+        selection.addRange(range);
     }
 
     toggleConnection() {
