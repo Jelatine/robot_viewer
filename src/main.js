@@ -18,6 +18,8 @@ import { MujocoSimulationManager } from './renderer/MujocoSimulationManager.js';
 import { i18n } from './utils/i18n.js';
 import { PoseController } from './animation/runtime/PoseController.js';
 import { AnimationWorkspace } from './animation/ui/AnimationWorkspace.js';
+import { MobileLayout } from './ui/MobileLayout.js';
+import './ui/mobile-layout.css';
 
 // Expose d3 globally for PanelManager
 window.d3 = d3;
@@ -277,6 +279,8 @@ class App {
 
             // Update editor button visibility
             this.updateEditorButtonVisibility();
+
+            this.mobileLayout = new MobileLayout(this.animationWorkspace);
 
             // Start render loop
             this.animate();
@@ -577,9 +581,10 @@ class App {
         if (!this._isReloading && !isMesh) {
             const editorPanel = document.getElementById('code-editor-panel');
             if (editorPanel && this.codeEditorManager) {
-                editorPanel.classList.add('visible');
+                // Keep the mobile viewer on its current drawer after loading.
+                if (!this.mobileLayout?.media.matches) editorPanel.classList.add('visible');
                 const openEditorBtn = document.getElementById('open-editor-btn');
-                if (openEditorBtn) {
+                if (openEditorBtn && editorPanel.classList.contains('visible')) {
                     openEditorBtn.classList.add('active');
                 }
                 this.codeEditorManager.loadFile(file);

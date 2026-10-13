@@ -453,7 +453,8 @@ export class SceneManager {
         const isSingleMesh = !this.currentModel || !this.currentModel.joints || this.currentModel.joints.size === 0;
         const distanceMultiplier = isSingleMesh ? 2.5 : 1.8;  // Single mesh: 2.5x distance, robot model: 1.8x distance
 
-        const distance = maxDim / (2 * Math.tan(fov / 2)) * distanceMultiplier;
+        const limitingFovTangent = Math.tan(fov / 2) * Math.min(1, this.camera.aspect);
+        const distance = maxDim / (2 * limitingFovTangent) * distanceMultiplier;
 
         // Side-back oblique view:
         // - From right-back (X positive + Z negative)
@@ -982,8 +983,12 @@ export class SceneManager {
             return;
         }
 
-        // Update camera aspect ratio
-        this.camera.aspect = width / height;
+        // Preserve framing along the smaller viewport dimension on rotation
+        // and when a mobile drawer changes the available canvas space.
+        const aspect = width / height;
+        const distanceScale = Math.min(1, this.camera.aspect) / Math.min(1, aspect);
+        this.camera.position.sub(this.controls.target).multiplyScalar(distanceScale).add(this.controls.target);
+        this.camera.aspect = aspect;
         this.camera.updateProjectionMatrix();
 
         // Update renderer size
@@ -1004,16 +1009,7 @@ export class SceneManager {
             return;
         }
 
-        // Update camera aspect ratio
-        this.camera.aspect = width / height;
-        this.camera.updateProjectionMatrix();
-
-        // Update renderer size (updateStyle set to true to update canvas style)
-        this.renderer.setSize(width, height, true);
-        this.renderer.setPixelRatio(window.devicePixelRatio);
-
-        // Render immediately to avoid black areas
-        this.render();
+        this.handleResize(width, height);
     }
 
     // ==================== Event System ====================

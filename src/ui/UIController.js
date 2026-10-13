@@ -300,6 +300,7 @@ export class UIController {
                 const toggleBtn = toggleBtnId ? document.getElementById(toggleBtnId) : null;
 
                 if (panel) {
+                    clearTimeout(panel._visibilityTimer);
                     const isVisible = panel.style.display !== 'none';
 
                     if (isVisible) {
@@ -307,7 +308,7 @@ export class UIController {
                         panel.style.opacity = '0';
                         panel.style.transform = 'scale(0.95)';
 
-                        setTimeout(() => {
+                        panel._visibilityTimer = setTimeout(() => {
                             panel.style.display = 'none';
                             panel.style.opacity = '';
                             panel.style.transform = '';
@@ -327,15 +328,17 @@ export class UIController {
 
             if (button && panel) {
                 button.addEventListener('click', () => {
+                    clearTimeout(panel._visibilityTimer);
                     const isVisible = panel.style.display !== 'none' &&
-                                     getComputedStyle(panel).display !== 'none';
+                                     getComputedStyle(panel).display !== 'none' &&
+                                     panel.style.opacity !== '0';
 
                     if (isVisible) {
                         panel.style.transition = 'opacity 0.2s ease, transform 0.2s ease';
                         panel.style.opacity = '0';
                         panel.style.transform = 'scale(0.95)';
 
-                        setTimeout(() => {
+                        panel._visibilityTimer = setTimeout(() => {
                             panel.style.display = 'none';
                             panel.style.opacity = '';
                             panel.style.transform = '';
@@ -353,7 +356,7 @@ export class UIController {
                         panel.style.opacity = '1';
                         panel.style.transform = 'scale(1)';
 
-                        setTimeout(() => {
+                        panel._visibilityTimer = setTimeout(() => {
                             panel.style.transition = '';
                         }, 200);
 
