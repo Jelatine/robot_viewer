@@ -67,6 +67,8 @@ export class EditorSelection {
     }
 
     selectTrack(trackId, { additive = false, toggle = false } = {}) {
+        if (!toggle && !this.markerId && this.keyframes.size === 0 && this.trackIds.has(trackId)
+            && (additive || this.trackIds.size === 1)) return;
         if (!additive && !toggle) this.clear({ silent: true });
         if (toggle && this.trackIds.has(trackId)) this.trackIds.delete(trackId);
         else this.trackIds.add(trackId);

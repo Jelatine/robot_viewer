@@ -6,6 +6,7 @@ import { UnifiedRobotModel, Link, Joint, JointLimits, VisualGeometry, CollisionG
 import * as THREE from 'three';
 import { loadMeshFile, ensureMeshHasPhongMaterial, getLoaders } from '../utils/MeshLoader.js';
 import { cleanFilePath, resolveFileFromMap } from '../utils/FileUtils.js';
+import { ClosedChainSolver } from '../utils/ClosedChainSolver.js';
 
 export class MJCFAdapter {
     /**
@@ -50,9 +51,7 @@ export class MJCFAdapter {
             }
 
             if (!fileMap) {
-                console.warn(`Could not find included file (no file map): ${filePath}`);
-                includeEl.remove();
-                continue;
+                throw new Error(`MJCF include requires its source folder: ${filePath}`);
             }
 
             // Resolve relative to the including file's directory.  This also
@@ -60,9 +59,7 @@ export class MJCFAdapter {
             // Windows separators, and case differences.
             const includedFile = resolveFileFromMap(filePath, fileMap, { baseDir: basePath || '' });
             if (!includedFile) {
-                console.warn(`Could not find included file: ${filePath}`);
-                includeEl.remove();
-                continue;
+                throw new Error(`MJCF included file not found: ${filePath}`);
             }
 
             // Find the map key for the included file so nested includes resolve
@@ -84,9 +81,7 @@ export class MJCFAdapter {
             // Prevent an accidentally cyclic include from recursing forever.
             const cycleKey = cleanFilePath(includedPath).toLowerCase();
             if (includeStack.has(cycleKey)) {
-                console.warn(`Skipping cyclic MJCF include: ${filePath}`);
-                includeEl.remove();
-                continue;
+                throw new Error(`Cyclic MJCF include: ${filePath}`);
             }
 
             let includedContent;
@@ -122,7 +117,7 @@ export class MJCFAdapter {
             // A complete MJCF contributes its children; a fragment contributes
             // its document element itself (e.g. <sensor> or <default>).
             const includedRoot = includedDoc.documentElement;
-            const childNodes = includedRoot?.tagName?.toLowerCase() === 'mujoco'
+            const childNodes = ['mujoco', 'mujocoinclude'].includes(includedRoot?.tagName?.toLowerCase())
                 ? Array.from(includedRoot.childNodes)
                 : includedRoot ? [includedRoot] : [];
 
@@ -192,12 +187,12 @@ export class MJCFAdapter {
      * @param {string} basePath - Base path for resolving relative include paths (optional)
      * @returns {Promise<UnifiedRobotModel>}
      */
-    static async parse(xmlContent, fileMap = null, basePath = null) {
+    static async parse(xmlContent, fileMap = null, basePath = null, { normalizeInitialPose = true } = {}) {
         // Process include tags first
-        const processedContent = await this.processIncludes(xmlContent, fileMap, basePath);
+        let processedContent = await this.processIncludes(xmlContent, fileMap, basePath);
 
         const parser = new DOMParser();
-        const doc = parser.parseFromString(processedContent, 'text/xml');
+        let doc = parser.parseFromString(processedContent, 'text/xml');
 
         // Check parse errors
         const parseError = doc.querySelector('parsererror');
@@ -205,13 +200,21 @@ export class MJCFAdapter {
             throw new Error('MJCF XML parsing failed: ' + parseError.textContent);
         }
 
+        const hasAttachments = !!doc.querySelector('attach');
+        if (hasAttachments) {
+            const { compileMJCFWithAttachments } = await import('../utils/MJCFAttachments.js');
+            processedContent = await compileMJCFWithAttachments(processedContent, fileMap, basePath, this);
+            doc = parser.parseFromString(processedContent, 'text/xml');
+        }
+
         // Includes are textual in MJCF.  Normalize duplicate top-level
         // sections before parsing so included robot content and scene content
         // are both retained.
         this.mergeTopLevelSections(doc);
+        this.expandDefaults(doc);
 
         const model = new UnifiedRobotModel();
-        model.name = 'mujoco_model';
+        model.name = doc.documentElement.getAttribute('model') || 'mujoco_model';
 
         // Parse default values and class definitions in default tags first
         // (needed for mesh scale inheritance)
@@ -265,10 +268,8 @@ export class MJCFAdapter {
                 // Determine if collision or visual (same logic as in parseBodies)
                 let isCollisionGeom = false;
                 if (!meshRef) {
-                    // Primitive geoms can be visual too (e.g. the orange ball
-                    // uses a sphere with rgba).  Only treat an unannotated
-                    // primitive as collision; honor the same visual markers
-                    // used for mesh geoms.
+                    // MJCF primitives are visible by default, even when they
+                    // also participate in collision detection.
                     if (contypeNum === 0 && conaffinityNum === 0) {
                         isCollisionGeom = false;
                     } else if (groupNum === 3 || geomName.includes('collision')) {
@@ -277,7 +278,7 @@ export class MJCFAdapter {
                                (densityNum === 0 && groupNum === 1) || hasRgba) {
                         isCollisionGeom = false;
                     } else {
-                        isCollisionGeom = true;
+                        isCollisionGeom = false;
                     }
                 } else {
                     if (contypeNum === 0 && conaffinityNum === 0) {
@@ -326,7 +327,7 @@ export class MJCFAdapter {
                         let rgba = null;
                         if (geomEl.hasAttribute('rgba')) {
                             const rgbaStr = geomEl.getAttribute('rgba');
-                            const rgbaVals = rgbaStr.split(' ').map(parseFloat);
+                            const rgbaVals = rgbaStr.trim().split(/\s+/).map(parseFloat);
                             if (rgbaVals.length >= 3) {
                                 rgba = {
                                     r: rgbaVals[0],
@@ -363,11 +364,41 @@ export class MJCFAdapter {
         // floor), keep top-level bodies structurally below that link. This
         // prevents them from being built once through their free joint and a
         // second time as independent roots.
-        const topLevelParent = model.links.has('worldbody') ? 'worldbody' : null;
+        // The world frame exists even without a floor. Top-level moving bodies
+        // need it as their joint parent, just like nested moving bodies do.
+        if (!model.links.has('worldbody')) {
+            const world = new Link('worldbody');
+            world.userData.isWorldbody = true;
+            model.addLink(world);
+        }
+        const topLevelParent = 'worldbody';
         this.parseBodies(worldbody, topLevelParent, bodyMap, model, null, meshMap, null, materialMap, classDefaults, rootDefaults);
 
         // Parse all joints
         this.parseJoints(worldbody, bodyMap, model, null, classDefaults);
+
+        for (const [name, { element }] of bodyMap) {
+            for (const site of element.querySelectorAll(':scope > site[name]')) {
+                model.sites.set(site.getAttribute('name'), { body: name, origin: this.parseOrigin(site) });
+            }
+        }
+        for (const site of worldbody.querySelectorAll(':scope > site[name]')) {
+            model.sites.set(site.getAttribute('name'), { body: 'worldbody', origin: this.parseOrigin(site) });
+        }
+        for (const actuator of doc.querySelectorAll('actuator > *')) {
+            const joint = model.getJoint(actuator.getAttribute('joint'));
+            if (joint) joint.actuated = true;
+            const tendon = actuator.getAttribute('tendon');
+            if (tendon) {
+                for (const fixed of doc.querySelectorAll('tendon > fixed')) {
+                    if (fixed.getAttribute('name') !== tendon) continue;
+                    for (const entry of fixed.querySelectorAll('joint')) {
+                        const target = model.getJoint(entry.getAttribute('joint'));
+                        if (target) target.actuated = true;
+                    }
+                }
+            }
+        }
 
         // Parse equality constraints (closed-chain constraints for parallel mechanisms)
         this.parseEquality(doc, model);
@@ -390,8 +421,90 @@ export class MJCFAdapter {
 
         // Create Three.js objects (asynchronously load mesh files)
         await this.createThreeObject(model, fileMap, meshMap);
+        model.userData.basePath = cleanFilePath(basePath || '');
+        if (hasAttachments) model.userData.compiledMJCF = processedContent;
+        if (model.constraints.size) {
+            model.constraintSolver = new ClosedChainSolver(model, (joint, value) => this.setJointAngle(joint, value, false));
+        }
+        if (normalizeInitialPose) this.normalizeInitialPose(model);
 
         return model;
+    }
+
+    static normalizeInitialPose(model) {
+        const adjusted = [];
+        for (const joint of model.joints.values()) {
+            if (!joint.limits || !['revolute', 'prismatic'].includes(joint.type)) continue;
+            const value = Math.max(joint.limits.lower, Math.min(joint.limits.upper, joint.currentValue));
+            if (value !== joint.currentValue) adjusted.push(joint);
+        }
+        if (!adjusted.length) return;
+        if (model.constraintSolver) {
+            const status = model.constraintSolver.initializeWithinLimits(adjusted);
+            if (!status.converged) throw new Error('MJCF initial pose cannot satisfy joint limits and equality constraints');
+        } else {
+            for (const joint of adjusted) this.setJointAngle(joint,
+                Math.max(joint.limits.lower, Math.min(joint.limits.upper, joint.currentValue)), false);
+        }
+        model.threeObject.updateMatrixWorld(true);
+    }
+
+    /** Materialize MJCF default attributes before interpreting their types.
+     * A class replaces the active childclass; it does not merge with it.
+     * Copy every dummy-element attribute so type, pos, size, limited and ref
+     * inherit together with axis/range, including the unnamed main class.
+     */
+    static expandDefaults(doc) {
+        const classes = new Map();
+        const orientations = ['quat', 'euler', 'axisangle', 'xyaxes', 'zaxis'];
+        const readClass = (element, parent = {}) => {
+            const values = structuredClone(parent);
+            for (const child of element.children) {
+                if (child.tagName === 'default') continue;
+                if (orientations.some(a => child.hasAttribute(a)) && values[child.tagName]) {
+                    for (const a of orientations) delete values[child.tagName][a];
+                }
+                values[child.tagName] = {
+                    ...values[child.tagName],
+                    ...Object.fromEntries(Array.from(child.attributes, a => [a.name, a.value]))
+                };
+            }
+            const name = element.getAttribute('class');
+            if (name) classes.set(name, values);
+            for (const child of element.children) {
+                if (child.tagName === 'default') readClass(child, values);
+            }
+            return values;
+        };
+        const main = doc.querySelector('mujoco > default');
+        const root = main ? readClass(main) : {};
+        const visit = (element, childclass = null) => {
+            childclass = element.getAttribute('childclass') || childclass;
+            const className = element.getAttribute('class') || childclass;
+            const defaults = className ? classes.get(className) : root;
+            const attrs = defaults?.[element.tagName];
+            if (attrs && element.tagName !== 'freejoint') {
+                const hasOrientation = orientations.some(a => element.hasAttribute(a));
+                for (const [name, value] of Object.entries(attrs)) {
+                    if (!element.hasAttribute(name) && !(hasOrientation && orientations.includes(name))) {
+                        element.setAttribute(name, value);
+                    }
+                }
+            }
+            for (const child of element.children) visit(child, childclass);
+        };
+        for (const section of doc.documentElement.children) {
+            if (section.tagName === 'worldbody' || section.tagName === 'asset') visit(section);
+        }
+    }
+
+    static getCompilerOptions(element) {
+        const compiler = element.ownerDocument?.querySelector('mujoco > compiler');
+        return {
+            angleScale: compiler?.getAttribute('angle') === 'radian' ? 1 : Math.PI / 180,
+            eulerseq: compiler?.getAttribute('eulerseq') || 'xyz',
+            autolimits: compiler?.getAttribute('autolimits') !== 'false'
+        };
     }
 
     /**
@@ -414,7 +527,9 @@ export class MJCFAdapter {
         // itself relative to the XML document. Keeping that directory in the
         // asset path is essential when a dragged package contains duplicate
         // basenames (go2w has both meshes/calf.stl and mjcf/assets/calf.stl).
-        const meshDir = doc.querySelector('compiler')?.getAttribute('meshdir')?.trim() || '';
+        const compiler = doc.querySelector('compiler');
+        const meshDir = (compiler?.getAttribute('meshdir') ?? compiler?.getAttribute('assetdir'))?.trim() || '';
+        const strippath = compiler?.getAttribute('strippath') === 'true';
 
         const meshes = asset.querySelectorAll('mesh');
         meshes.forEach((meshEl, index) => {
@@ -473,7 +588,7 @@ export class MJCFAdapter {
 
                 meshMap.set(name, {
                     type: 'file',
-                    path: this.resolveAssetFilePath(file, basePath, meshDir),
+                    path: this.resolveAssetFilePath(strippath ? file.replace(/\\/g, '/').split('/').pop() : file, basePath, meshDir),
                     scale: scaleVec
                 });
             } else {
@@ -527,7 +642,7 @@ export class MJCFAdapter {
             // Parse rgba
             const rgba = matEl.getAttribute('rgba');
             if (rgba) {
-                const vals = rgba.split(' ').map(parseFloat);
+                const vals = rgba.trim().split(/\s+/).map(parseFloat);
                 if (vals.length >= 3) {
                     material.rgba = {
                         r: vals[0],
@@ -541,7 +656,7 @@ export class MJCFAdapter {
             // Parse other material properties
             const specular = matEl.getAttribute('specular');
             if (specular) {
-                const vals = specular.split(' ').map(parseFloat);
+                const vals = specular.trim().split(/\s+/).map(parseFloat);
                 material.specular = vals[0] || 0.5;
             }
 
@@ -602,14 +717,14 @@ export class MJCFAdapter {
                 // Parse axis (if axis defined, completely replace parent axis)
                 const axis = jointEl.getAttribute('axis');
                 if (axis) {
-                    const axisVals = axis.split(' ').map(parseFloat);
+                    const axisVals = axis.trim().split(/\s+/).map(parseFloat);
                     defaults.joint.axis = [axisVals[0] || 0, axisVals[1] || 0, axisVals[2] || 0];
                 }
 
                 // Parse range
                 const range = jointEl.getAttribute('range');
                 if (range) {
-                    const rangeVals = range.split(' ').map(parseFloat);
+                    const rangeVals = range.trim().split(/\s+/).map(parseFloat);
                     defaults.joint.range = rangeVals;
                 }
 
@@ -648,7 +763,7 @@ export class MJCFAdapter {
                 // Parse rgba
                 const rgba = geomEl.getAttribute('rgba');
                 if (rgba) {
-                    const rgbaVals = rgba.split(' ').map(parseFloat);
+                    const rgbaVals = rgba.trim().split(/\s+/).map(parseFloat);
                     if (rgbaVals.length >= 3) {
                         defaults.geom.rgba = {
                             r: rgbaVals[0],
@@ -830,9 +945,8 @@ export class MJCFAdapter {
                 // [Key Strategy]: Distinguish visual and collision geoms
                 // Basic geometries (box, cylinder, sphere) are usually simplified shapes for collision
                 if (!meshRef) {
-                    // Primitive geoms can be visual too (e.g. spheres with an
-                    // rgba color).  Honor the same visual markers as meshes;
-                    // an otherwise unannotated primitive remains collision.
+                    // A physical primitive is also visible unless the model
+                    // explicitly places it in its collision representation.
                     if (contypeNum === 0 && conaffinityNum === 0) {
                         isCollisionGeom = false;
                     } else if (groupNum === 3 || geomName.includes('collision')) {
@@ -841,7 +955,7 @@ export class MJCFAdapter {
                                (densityNum === 0 && groupNum === 1) || hasRgba) {
                         isCollisionGeom = false;
                     } else {
-                        isCollisionGeom = true;
+                        isCollisionGeom = false;
                     }
                 } else {
                     // Has mesh reference, check if should be collision
@@ -923,7 +1037,7 @@ export class MJCFAdapter {
                         // 1. First check geom's own rgba, then inherited rgba
                         if (geomEl.hasAttribute('rgba')) {
                             const rgbaStr = geomEl.getAttribute('rgba');
-                            const rgbaVals = rgbaStr.split(' ').map(parseFloat);
+                            const rgbaVals = rgbaStr.trim().split(/\s+/).map(parseFloat);
                             if (rgbaVals.length >= 3) {
                                 rgba = {
                                     r: rgbaVals[0],
@@ -1018,7 +1132,7 @@ export class MJCFAdapter {
             case 'box':
                 const size = geomEl.getAttribute('size');
                 if (size) {
-                    const sizes = size.split(' ').map(parseFloat);
+                    const sizes = size.trim().split(/\s+/).map(parseFloat);
                     // MJCF size is half-size, multiply by 2 to convert to full size
                     geometry.size = sizes.length === 1
                         ? { x: sizes[0] * 2, y: sizes[0] * 2, z: sizes[0] * 2 }
@@ -1044,21 +1158,22 @@ export class MJCFAdapter {
                     const p1 = fromtoValues.slice(0, 3);
                     const p2 = fromtoValues.slice(3, 6);
                     const frame = this.computeFromtoFrame(p1, p2);
+                    const [x, y, z, w] = frame.quaternion;
 
                     // Store fromto data
                     geometry.fromto = {
-                        p1: p1,
-                        p2: p2,
+                        p1,
+                        p2,
                         center: frame.center,
                         height: frame.height,
-                        quaternion: frame.quaternion
+                        quat: { w, x, y, z }
                     };
 
                     // Parse radius - for fromto, size is just radius
                     const radiusVal = parseFloat(radiusAttr || '0.01');
                     geometry.size = { radius: radiusVal, height: frame.height };
                 } else if (radiusAttr) {
-                    const radii = radiusAttr.split(' ').map(parseFloat);
+                    const radii = radiusAttr.trim().split(/\s+/).map(parseFloat);
                     // MJCF cylinder/capsule size is [radius, half-height], height needs to be multiplied by 2
                     geometry.size = {
                         radius: radii[0] || 0.1,
@@ -1157,6 +1272,8 @@ export class MJCFAdapter {
      */
     static parseOrigin(element) {
         const origin = { xyz: [0, 0, 0], rpy: [0, 0, 0] };
+        const numbers = name => (element.getAttribute(name) || '').trim().split(/\s+/).map(Number);
+        const { angleScale, eulerseq } = this.getCompilerOptions(element);
 
         // Check pos attribute
         const pos = element.getAttribute('pos');
@@ -1165,25 +1282,42 @@ export class MJCFAdapter {
             origin.xyz = [xyz[0] || 0, xyz[1] || 0, xyz[2] || 0];
         }
 
-        // Check quat attribute (quaternion, needs to be converted to rpy)
+        let rotation = null;
         const quat = element.getAttribute('quat');
         if (quat) {
-            const q = quat.trim().split(/\s+/).map(parseFloat);
-            // MJCF uses wxyz order
-            const qw = q[0], qx = q[1], qy = q[2], qz = q[3];
-
-            // Save original quaternion (for inertia visualization)
-            origin.quat = { w: qw, x: qx, y: qy, z: qz };
-
-            // Convert to Euler angles
-            origin.rpy = this.quaternionToEuler(qw, qx, qy, qz);
-        } else {
-            // Check euler attribute
-            const euler = element.getAttribute('euler');
-            if (euler) {
-                const rpy = euler.trim().split(/\s+/).map(parseFloat);
-                origin.rpy = [rpy[0] || 0, rpy[1] || 0, rpy[2] || 0];
+            const [w, x, y, z] = numbers('quat');
+            rotation = new THREE.Quaternion(x, y, z, w).normalize();
+        } else if (element.hasAttribute('euler')) {
+            rotation = new THREE.Quaternion();
+            const angles = numbers('euler');
+            for (let i = 0; i < 3; i++) {
+                const axis = new THREE.Vector3();
+                axis[eulerseq[i].toLowerCase()] = 1;
+                const turn = new THREE.Quaternion().setFromAxisAngle(axis, angles[i] * angleScale);
+                // Lowercase: moving axes. Uppercase: fixed parent axes.
+                if (eulerseq[i] === eulerseq[i].toLowerCase()) rotation.multiply(turn);
+                else rotation.premultiply(turn);
             }
+        } else if (element.hasAttribute('axisangle')) {
+            const [x, y, z, angle] = numbers('axisangle');
+            rotation = new THREE.Quaternion().setFromAxisAngle(
+                new THREE.Vector3(x, y, z).normalize(), angle * angleScale
+            );
+        } else if (element.hasAttribute('xyaxes')) {
+            const axes = numbers('xyaxes');
+            const x = new THREE.Vector3(...axes.slice(0, 3)).normalize();
+            const y = new THREE.Vector3(...axes.slice(3, 6));
+            y.addScaledVector(x, -y.dot(x)).normalize();
+            const z = new THREE.Vector3().crossVectors(x, y);
+            rotation = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+        } else if (element.hasAttribute('zaxis')) {
+            rotation = new THREE.Quaternion().setFromUnitVectors(
+                new THREE.Vector3(0, 0, 1), new THREE.Vector3(...numbers('zaxis')).normalize()
+            );
+        }
+        if (rotation) {
+            origin.quat = { w: rotation.w, x: rotation.x, y: rotation.y, z: rotation.z };
+            origin.rpy = this.quaternionToEuler(rotation.w, rotation.x, rotation.y, rotation.z);
         }
 
         return origin;
@@ -1267,14 +1401,14 @@ export class MJCFAdapter {
         let mjcf_ixy = 0, mjcf_ixz = 0, mjcf_iyz = 0;
 
         if (diaginertia) {
-            const values = diaginertia.split(' ').map(parseFloat);
+            const values = diaginertia.trim().split(/\s+/).map(parseFloat);
             mjcf_ixx = values[0] || 0;
             mjcf_iyy = values[1] || 0;
             mjcf_izz = values[2] || 0;
         }
 
         if (fullinertia) {
-            const values = fullinertia.split(' ').map(parseFloat);
+            const values = fullinertia.trim().split(/\s+/).map(parseFloat);
             mjcf_ixx = values[0] || 0;
             mjcf_iyy = values[1] || 0;
             mjcf_izz = values[2] || 0;
@@ -1468,179 +1602,61 @@ export class MJCFAdapter {
     /**
      * Parse joint element
      */
-    static parseJoints(element, bodyMap, model, parentBodyName = null, defaultsMap = null, inheritedChildClass = null) {
-        const joints = element.querySelectorAll(':scope > joint');
-
-        joints.forEach(jointEl => {
-            const jointName = jointEl.getAttribute('name') || `joint_${model.joints.size}`;
-            const jointType = jointEl.getAttribute('type') || 'hinge';
-
-            // Map MJCF joint types to URDF types
-            let urdfType = 'revolute';
-            if (jointType === 'slide') urdfType = 'prismatic';
-            else if (jointType === 'free') urdfType = 'continuous';
-            else if (jointType === 'ball' || jointType === 'hinge') urdfType = 'revolute';
-
-            const joint = new Joint(jointName, urdfType);
-
-            // Joint types that don't require axis attribute
-            const jointTypesWithoutAxis = ['free', 'ball'];
-            const requiresAxis = !jointTypesWithoutAxis.includes(jointType);
-
-            // [Critical fix] In MJCF, joint is defined inside body, representing the connection relationship between this body and its parent body
-            // So: parent is parent body, child is current body
-            const currentBody = jointEl.parentElement;
-            const currentBodyName = currentBody.getAttribute('name');
-
-            // parent is the passed parent body name (or worldbody)
-            if (parentBodyName) {
-                joint.parent = parentBodyName;
-            } else {
-                // If no parent body, parent is worldbody
-                joint.parent = 'worldbody';
-            }
-
-            // child is current body
-            if (currentBodyName) {
-                joint.child = currentBodyName;
-            }
-
-
-            // [Important] Parse axis, consider class inheritance
-            let axisVals = null;
-            let axisSource = '';
-
-            // First try to get axis from joint element itself
-            const axis = jointEl.getAttribute('axis');
-            if (axis) {
-                axisVals = axis.split(' ').map(parseFloat);
-                axisSource = 'directly defined';
-            } else {
-                // If not, inherit from class or childclass
-                let className = jointEl.getAttribute('class');
-
-                // If joint has no class, check parent body's childclass
-                if (!className) {
-                    className = currentBody.getAttribute('childclass') || inheritedChildClass;
+    static parseJoints(element, bodyMap, model) {
+        const { angleScale, autolimits } = this.getCompilerOptions(element);
+        for (const { link, element: body, parentName } of bodyMap.values()) {
+            for (const jointEl of body.children) {
+                if (jointEl.tagName !== 'joint' && jointEl.tagName !== 'freejoint') continue;
+                const name = jointEl.getAttribute('name') || `joint_${model.joints.size}`;
+                const type = jointEl.tagName === 'freejoint' ? 'free' : jointEl.getAttribute('type') || 'hinge';
+                const joint = new Joint(name, type === 'slide' ? 'prismatic' : type === 'hinge' ? 'revolute' : type);
+                joint.parent = parentName || 'worldbody';
+                joint.child = link.name;
+                joint.origin = this.parseOrigin(jointEl);
+                const axis = (jointEl.getAttribute('axis') || '0 0 1').trim().split(/\s+/).map(Number);
+                joint.axis = { xyz: new THREE.Vector3(...axis).normalize().toArray() };
+                const scale = type === 'hinge' || type === 'ball' ? angleScale : 1;
+                joint.ref = Number(jointEl.getAttribute('ref') || 0) * scale;
+                joint.currentValue = joint.ref;
+                joint.stiffness = Number(jointEl.getAttribute('stiffness') || 0);
+                const range = jointEl.getAttribute('range');
+                const limited = jointEl.getAttribute('limited') || 'auto';
+                if (range && (limited === 'true' || (limited === 'auto' && autolimits))) {
+                    const [lower, upper] = range.trim().split(/\s+/).map(Number);
+                    joint.limits = new JointLimits();
+                    joint.limits.lower = lower * scale;
+                    joint.limits.upper = upper * scale;
                 }
-
-                if (className && defaultsMap) {
-                    const defaults = defaultsMap.get(className);
-                    if (defaults && defaults.joint && defaults.joint.axis) {
-                        axisVals = defaults.joint.axis;
-                        axisSource = `inherited from class="${className}"`;
-                    }
-                }
-
-                // Only warn if axis is required for this joint type
-                if (!axisVals && requiresAxis) {
-                    console.warn(`  ⚠️ Joint "${jointName}" (type="${jointType}") has no axis attribute (class="${className || 'none'}")`);
-                }
+                if (type === 'hinge' && !joint.limits) joint.type = 'continuous';
+                model.addJoint(joint);
             }
-
-            // Set axis
-            if (axisVals) {
-                joint.axis = { xyz: [axisVals[0] || 0, axisVals[1] || 0, axisVals[2] || 0] };
-            }
-
-            // [Important] Parse limits, consider class inheritance
-            let rangeVals = null;
-
-            // First try to get range from joint element itself
-            const range = jointEl.getAttribute('range');
-            if (range) {
-                rangeVals = range.split(' ').map(parseFloat);
-            } else {
-                // If not, inherit from class or childclass
-                let className = jointEl.getAttribute('class');
-
-                // If joint has no class, check parent body's childclass
-                if (!className) {
-                    className = currentBody.getAttribute('childclass') || inheritedChildClass;
-                }
-
-                if (className && defaultsMap) {
-                    const defaults = defaultsMap.get(className);
-                    if (defaults && defaults.joint && defaults.joint.range) {
-                        rangeVals = defaults.joint.range;
-                    }
-                }
-            }
-
-            // Set limits
-            if (rangeVals && rangeVals.length >= 2) {
-                const limits = new JointLimits();
-                limits.lower = rangeVals[0];
-                limits.upper = rangeVals[1];
-                joint.limits = limits;
-            }
-            // If no range definition, joint.limits remains null (indicating unlimited/continuous)
-
-            // Parse joint's own origin (if any)
-            // joint's pos defines the offset of joint in this body's coordinate system
-            joint.origin = this.parseOrigin(jointEl);
-
-            model.addJoint(joint);
-        });
-
-        // Process freejoint elements (free-floating joints)
-        const freejoints = element.querySelectorAll(':scope > freejoint');
-        freejoints.forEach((freejointEl, index) => {
-            const freejointName = freejointEl.getAttribute('name') || `freejoint_${model.joints.size}`;
-            
-            // Create a 'free' type joint (maps to continuous/floating in URDF terms)
-            const joint = new Joint(freejointName, 'continuous');
-            joint.type = 'free'; // Mark as free joint type
-            
-            // Get parent body
-            const currentBody = freejointEl.parentElement;
-            const currentBodyName = currentBody.getAttribute('name');
-            
-            // Parent is worldbody for freejoints
-            if (parentBodyName) {
-                joint.parent = parentBodyName;
-            } else {
-                joint.parent = 'worldbody';
-            }
-            
-            // Child is current body
-            if (currentBodyName) {
-                joint.child = currentBodyName;
-            }
-            
-            // Parse origin
-            joint.origin = this.parseOrigin(freejointEl);
-            
-            model.addJoint(joint);
-        });
-
-        // Recursively process child bodies
-        // Find direct child bodies (use :scope > body to ensure only direct children are selected)
-        const bodies = element.querySelectorAll(':scope > body');
-        const currentElementName = element.getAttribute('name'); // Name of current body or worldbody
-        const childClass = element.getAttribute('childclass') || inheritedChildClass;
-
-        bodies.forEach(body => {
-            // Child body's parent body name is current element's name
-            // Note: worldbody has no name attribute, so first level body's parent is null or 'worldbody'
-            this.parseJoints(body, bodyMap, model, currentElementName || 'worldbody', defaultsMap, childClass);
-        });
+        }
     }
 
     /**
      * Parse equality constraints (closed-chain constraints for parallel mechanisms)
      */
     static parseEquality(doc, model) {
-        const equality = doc.querySelector('equality');
+        // Defaults can contain an <equality> template before the real section.
+        const equality = doc.querySelector('mujoco > equality');
         if (!equality) {
             return; // No equality tag, skip
         }
+
+        const common = (constraint, element) => {
+            constraint.active = element.getAttribute('active') !== 'false';
+            constraint.site1 = element.getAttribute('site1');
+            constraint.site2 = element.getAttribute('site2');
+            const relpose = element.getAttribute('relpose');
+            if (relpose) constraint.relpose = relpose.trim().split(/\s+/).map(Number);
+        };
 
         // Parse connect constraints (connect two bodies)
         const connects = equality.querySelectorAll('connect');
         connects.forEach((connectEl, index) => {
             const name = connectEl.getAttribute('name') || `connect_${index}`;
             const constraint = new Constraint(name, 'connect');
+            common(constraint, connectEl);
 
             constraint.body1 = connectEl.getAttribute('body1');
             constraint.body2 = connectEl.getAttribute('body2');
@@ -1669,6 +1685,7 @@ export class MJCFAdapter {
         welds.forEach((weldEl, index) => {
             const name = weldEl.getAttribute('name') || `weld_${index}`;
             const constraint = new Constraint(name, 'weld');
+            common(constraint, weldEl);
 
             constraint.body1 = weldEl.getAttribute('body1');
             constraint.body2 = weldEl.getAttribute('body2');
@@ -1697,6 +1714,7 @@ export class MJCFAdapter {
         joints.forEach((jointEl, index) => {
             const name = jointEl.getAttribute('name') || `joint_constraint_${index}`;
             const constraint = new Constraint(name, 'joint');
+            common(constraint, jointEl);
 
             constraint.joint1 = jointEl.getAttribute('joint1');
             constraint.joint2 = jointEl.getAttribute('joint2');
@@ -1711,7 +1729,8 @@ export class MJCFAdapter {
             constraint.userData = {
                 joint1: constraint.joint1,
                 joint2: constraint.joint2,
-                polycoef: constraint.polycoef
+                polycoef: constraint.polycoef,
+                active: jointEl.getAttribute('active') !== 'false'
             };
 
             model.addConstraint(constraint);
@@ -1733,6 +1752,15 @@ export class MJCFAdapter {
 
             model.addConstraint(constraint);
         });
+
+        // Keep unsupported equality types visible to the UI instead of
+        // silently claiming the whole model's closed chain is satisfied.
+        for (const element of equality.children) {
+            if (['connect', 'weld', 'joint', 'distance'].includes(element.tagName)) continue;
+            const constraint = new Constraint(element.getAttribute('name') || `${element.tagName}_${model.constraints.size}`, element.tagName);
+            common(constraint, element);
+            model.addConstraint(constraint);
+        }
     }
 
     /**
@@ -1804,11 +1832,7 @@ export class MJCFAdapter {
                     if (visual.geometry && visual.geometry.fromto) {
                         // Use fromto center position
                         mesh.position.set(...visual.geometry.fromto.center);
-                        // Apply fromto rotation plus any explicit origin
-                        // rotation using quaternion composition.
-                        const fromtoQuat = visual.geometry.fromto.quaternion;
-                        mesh.quaternion.set(fromtoQuat[0], fromtoQuat[1], fromtoQuat[2], fromtoQuat[3]);
-                        mesh.quaternion.multiply(this.getOriginQuaternion(visual.origin));
+                        mesh.quaternion.copy(this.getOriginQuaternion(visual.geometry.fromto));
                     } else {
                         this.applyOriginTransform(mesh, visual.origin);
                     }
@@ -1929,11 +1953,7 @@ export class MJCFAdapter {
                     if (collision.geometry && collision.geometry.fromto) {
                         // Use fromto center position
                         mesh.position.set(...collision.geometry.fromto.center);
-                        // Apply fromto rotation plus any explicit origin
-                        // rotation using quaternion composition.
-                        const fromtoQuat = collision.geometry.fromto.quaternion;
-                        mesh.quaternion.set(fromtoQuat[0], fromtoQuat[1], fromtoQuat[2], fromtoQuat[3]);
-                        mesh.quaternion.multiply(this.getOriginQuaternion(collision.origin));
+                        mesh.quaternion.copy(this.getOriginQuaternion(collision.geometry.fromto));
                     } else {
                         this.applyOriginTransform(mesh, collision.origin);
                     }
@@ -2281,8 +2301,9 @@ export class MJCFAdapter {
     /**
      * Set joint angle
      */
-    static setJointAngle(joint, angle) {
+    static setJointAngle(joint, angle, updateMatrices = true) {
         joint.currentValue = angle;
+        const displacement = angle - (joint.ref || 0);
 
         if (joint.threeObject) {
             // Rotate based on joint type and axis
@@ -2294,7 +2315,7 @@ export class MJCFAdapter {
                 } else if (joint.axis && joint.axis.xyz) {
                     // If no pre-stored axis, need coordinate system conversion
                     const mjcfAxis = joint.axis.xyz;
-                    axis = new THREE.Vector3(mjcfAxis[0], mjcfAxis[2], -mjcfAxis[1]).normalize();
+                    axis = new THREE.Vector3(...mjcfAxis).normalize();
                 } else {
                     console.warn('Joint has no axis definition:', joint.name);
                     return;
@@ -2307,14 +2328,14 @@ export class MJCFAdapter {
 
                 // Set rotation using quaternion: initial rotation * joint rotation
                 const rotationQuat = new THREE.Quaternion();
-                rotationQuat.setFromAxisAngle(axis, angle);
+                rotationQuat.setFromAxisAngle(axis, displacement);
 
                 // Combine rotations: apply initial rotation first, then joint rotation
                 joint.threeObject.quaternion.copy(joint.threeObject.userData.initialQuaternion);
                 joint.threeObject.quaternion.multiply(rotationQuat);
 
                 // Update matrix
-                joint.threeObject.updateMatrixWorld(true);
+                if (updateMatrices) joint.threeObject.updateMatrixWorld(true);
             } else if (joint.type === 'prismatic') {
                 // Use axis stored on threeObject (already converted) or convert from joint.axis
                 let axis;
@@ -2323,7 +2344,7 @@ export class MJCFAdapter {
                 } else if (joint.axis && joint.axis.xyz) {
                     // If no pre-stored axis, need coordinate system conversion
                     const mjcfAxis = joint.axis.xyz;
-                    axis = new THREE.Vector3(mjcfAxis[0], mjcfAxis[2], -mjcfAxis[1]).normalize();
+                    axis = new THREE.Vector3(...mjcfAxis).normalize();
                 } else {
                     console.warn('Joint has no axis definition:', joint.name);
                     return;
@@ -2336,10 +2357,10 @@ export class MJCFAdapter {
 
                 // Translate joint: initial position + move along axis
                 joint.threeObject.position.copy(joint.threeObject.userData.initialPosition);
-                joint.threeObject.position.addScaledVector(axis, angle);
+                joint.threeObject.position.addScaledVector(axis, displacement);
 
                 // Update matrix
-                joint.threeObject.updateMatrixWorld(true);
+                if (updateMatrices) joint.threeObject.updateMatrixWorld(true);
             }
         }
     }

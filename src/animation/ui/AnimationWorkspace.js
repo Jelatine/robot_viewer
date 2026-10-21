@@ -1,3 +1,4 @@
+import { isScalarJoint } from '../../models/UnifiedRobotModel.js';
 import { AnimationStore } from '../core/AnimationStore.js';
 import { EditorSelection } from '../core/EditorSelection.js';
 import { PlaybackController } from '../runtime/PlaybackController.js';
@@ -764,7 +765,7 @@ export class AnimationWorkspace {
     reconcileModelTracks() {
         const jointNames = [];
         this.model?.joints?.forEach((joint, name) => {
-            if (joint.type !== 'fixed') jointNames.push(name);
+            if (isScalarJoint(joint)) jointNames.push(name);
         });
         this.store.project.robot.jointNames = jointNames;
         this.store.project.robot.joints = {};
@@ -987,7 +988,7 @@ export class AnimationWorkspace {
     }
 
     handlePoseEvent(event) {
-        if (event.type !== 'jointChanged' || event.source === 'playback') return;
+        if (event.type !== 'jointChanged' || ['playback', 'constraint', 'reset'].includes(event.source)) return;
         const track = this.store.getTrack(event.jointName);
         if (track) this.selection.selectTrack(track.id);
 

@@ -1,3 +1,4 @@
+import { isScalarJoint } from '../models/UnifiedRobotModel.js';
 /**
  * JointControlsUI - Joint control UI module
  * Responsible for creating and managing joint control sliders and input fields
@@ -14,6 +15,7 @@ export class JointControlsUI {
         this.isUpdatingFromEditor = false; // Flag to prevent circular updates
         this.poseController = null;
         this.unsubscribePose = null;
+        this.jointControls = new Map();
     }
 
     setPoseController(poseController) {
@@ -22,17 +24,28 @@ export class JointControlsUI {
         this.unsubscribePose = poseController?.subscribe((event) => {
             if (event.type === 'jointChanged') {
                 this.updateJointDisplay(event.jointName, event.value);
+            } else if (event.type === 'constraintsSolved') {
+                this.updateConstraintStatus(event.status);
             }
         });
     }
 
+    updateConstraintStatus(status) {
+        const element = document.getElementById('constraint-status');
+        if (!element || !status) return;
+        const key = status.unsupported?.length ? 'closedChainPartial'
+            : status.converged ? 'closedChainReady' : 'closedChainUnreachable';
+        element.setAttribute('data-i18n', key);
+        element.textContent = window.i18n.t(key);
+        element.style.color = status.converged && !status.unsupported?.length ? 'var(--text-secondary)' : '#e5a03c';
+    }
+
     updateJointDisplay(jointName, value) {
-        const slider = Array.from(document.querySelectorAll('input[data-joint]'))
-            .find((input) => input.dataset.joint === jointName);
-        if (!slider) return;
+        const control = this.jointControls.get(jointName);
+        if (!control) return;
+        const { slider, updateValue } = control;
         slider.value = value;
-        const control = slider.closest('.joint-control');
-        control?._updateDisplay?.();
+        updateValue();
     }
 
     /**
@@ -166,6 +179,15 @@ export class JointControlsUI {
         if (!container) return;
 
         container.innerHTML = '';
+        this.jointControls.clear();
+        if (model?.constraints?.size) {
+            const status = document.createElement('div');
+            status.id = 'constraint-status';
+            status.setAttribute('role', 'status');
+            status.style.cssText = 'font-size:12px; padding:8px 4px;';
+            container.appendChild(status);
+            this.updateConstraintStatus(model.constraintStatus);
+        }
 
         if (!model || !model.joints || model.joints.size === 0) {
             const emptyState = document.createElement('div');
@@ -177,7 +199,7 @@ export class JointControlsUI {
 
         let controllableJoints = 0;
         model.joints.forEach((joint) => {
-            if (joint.type !== 'fixed') {
+            if (isScalarJoint(joint)) {
                 controllableJoints++;
             }
         });
@@ -193,7 +215,7 @@ export class JointControlsUI {
         // Save initial joint values when model loads
         this.initialJointValues.clear();
         model.joints.forEach((joint, name) => {
-            if (joint.type !== 'fixed') {
+            if (isScalarJoint(joint)) {
                 const limits = joint.limits || {};
                 const lower = limits.lower !== undefined ? limits.lower : -Math.PI;
                 const upper = limits.upper !== undefined ? limits.upper : Math.PI;
@@ -202,8 +224,10 @@ export class JointControlsUI {
             }
         });
 
-        model.joints.forEach((joint, name) => {
-            if (joint.type === 'fixed') return;
+        const orderedJoints = Array.from(model.joints.values());
+        if (model.constraints?.size) orderedJoints.sort((a, b) => Number(!!b.actuated) - Number(!!a.actuated));
+        orderedJoints.forEach((joint) => {
+            if (!isScalarJoint(joint)) return;
             const control = this.createJointControl(joint, model);
             container.appendChild(control);
         });
@@ -230,6 +254,21 @@ export class JointControlsUI {
         name.title = joint.name;
 
         header.appendChild(name);
+        if (model.constraints?.size && joint.actuated) {
+            const badge = document.createElement('span');
+            badge.setAttribute('data-i18n', 'actuatedJoint');
+            badge.textContent = window.i18n.t('actuatedJoint');
+            badge.style.cssText = 'color:var(--accent-color,#0088ff); font-size:10px; margin-left:6px;';
+            header.appendChild(badge);
+        }
+        if (joint.stiffness > 0) {
+            const badge = document.createElement('span');
+            badge.setAttribute('data-i18n', 'springJoint');
+            badge.textContent = window.i18n.t('springJoint');
+            badge.title = window.i18n.t('springJointHint');
+            badge.style.cssText = 'color:var(--text-secondary); font-size:10px; margin-left:6px;';
+            header.appendChild(badge);
+        }
 
         // Second row: editable limit labels + slider
         const sliderRow = document.createElement('div');
@@ -289,7 +328,10 @@ export class JointControlsUI {
         };
 
         const updateValueInput = () => {
-            const value = parseFloat(slider.value);
+            // Range inputs clamp and quantize their value. Display the actual
+            // pose, including imported MJCF references outside the limits and
+            // values restored after a rejected closed-chain edit.
+            const value = joint.currentValue ?? parseFloat(slider.value);
             valueInput.value = this.toDisplayValue(joint, value).toFixed(this.getDisplayDecimals(joint));
         };
 
@@ -567,19 +609,9 @@ export class JointControlsUI {
                 this.sceneManager.constraintManager.applyConstraints(model, joint);
             }
 
-            if (!slider._pendingRender) {
-                slider._pendingRender = true;
-                requestAnimationFrame(() => {
-                    this.sceneManager.redraw();
-                    this.sceneManager.render();
-
-                    // Trigger measurement update
-                    if (this.sceneManager.onMeasurementUpdate) {
-                        this.sceneManager.onMeasurementUpdate();
-                    }
-
-                    slider._pendingRender = false;
-                });
+            if (!this.poseController) {
+                this.sceneManager.redraw();
+                this.sceneManager.onMeasurementUpdate?.();
             }
         });
 
@@ -633,6 +665,7 @@ export class JointControlsUI {
             updateLabels();
             valueUnit.textContent = this.getJointUnit(joint);
         };
+        this.jointControls.set(joint.name, { slider, updateValue: updateValueInput });
 
         return div;
     }
@@ -657,7 +690,7 @@ export class JointControlsUI {
         if (!model || !model.joints) return;
 
         model.joints.forEach((joint, name) => {
-            if (joint.type !== 'fixed') {
+            if (isScalarJoint(joint)) {
                 // Use saved initial value, if not saved use middle value
                 let initialValue = this.initialJointValues.get(name);
 
@@ -674,6 +707,7 @@ export class JointControlsUI {
                         source: 'reset',
                         commit: false,
                         ignoreLimits: true,
+                        applyConstraints: false,
                         render: false,
                         measure: false
                     });
@@ -693,6 +727,7 @@ export class JointControlsUI {
             }
         });
 
+        this.poseController?.projectConstraints(Array.from(model.joints.values()).filter(isScalarJoint));
         this.sceneManager.render();
 
         // Trigger measurement update
@@ -711,7 +746,7 @@ export class JointControlsUI {
             const jointName = slider.getAttribute('data-joint');
             const joint = model.joints.get(jointName);
 
-            if (joint && joint.type !== 'fixed') {
+            if (joint && isScalarJoint(joint)) {
                 if (ignoreLimits) {
                     slider.min = -Math.PI * 2;
                     slider.max = Math.PI * 2;

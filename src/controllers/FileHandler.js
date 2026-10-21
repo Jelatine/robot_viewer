@@ -273,18 +273,19 @@ export class FileHandler {
 
     /**
      * Pick the model to open when a folder contains multiple MJCF files.
-     * Prefer the canonical scene/model over helper objects and specialised
+     * Prefer the robot model over scene wrappers, helper objects and specialised
      * variants (ball, backlash, rollers, etc.).
      */
     selectInitialModel(loadableFiles) {
         if (!loadableFiles || loadableFiles.length === 0) return null;
 
-        const models = loadableFiles.filter(fileInfo => fileInfo.category === 'model');
+        let models = loadableFiles.filter(fileInfo => fileInfo.category === 'model');
         if (models.length === 0) return loadableFiles[0];
 
         const basename = fileInfo => (fileInfo.name || '').split(/[\\/]/).pop().toLowerCase();
+        const robots = models.filter(fileInfo => !/(^|[_-])scene([_.-]|$)/i.test(basename(fileInfo)));
+        if (robots.length) models = robots;
         const exactPreference = [
-            'scene.xml',
             'robot_allcollisions.xml',
             'robot.xml',
             'robot_walk.xml'

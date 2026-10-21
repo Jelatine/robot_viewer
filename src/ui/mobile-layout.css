@@ -1,0 +1,401 @@
+/* Keep the canvas visible and every control reachable on smaller screens. */
+@media (max-width: 1100px) {
+    #top-control-bar {
+        overflow-x: auto;
+        scrollbar-width: thin;
+    }
+
+    #top-control-bar > * {
+        flex-shrink: 0;
+    }
+}
+
+@media (max-width: 1023px) {
+    :root {
+        --mobile-left: max(10px, env(safe-area-inset-left));
+        --mobile-right: max(10px, env(safe-area-inset-right));
+        --mobile-top: max(8px, env(safe-area-inset-top));
+        --mobile-bottom: max(22px, env(safe-area-inset-bottom));
+        --mobile-toolbar-bottom: calc(var(--mobile-top) + 116px);
+    }
+
+    #container {
+        width: 100%;
+        height: 100dvh;
+    }
+
+    #canvas-container {
+        top: var(--mobile-toolbar-bottom);
+        bottom: var(--mobile-drawer-inset, 0px);
+        right: var(--mobile-drawer-right, 0px);
+    }
+
+    #top-control-bar {
+        position: fixed;
+        top: var(--mobile-top);
+        left: var(--mobile-left);
+        right: var(--mobile-right);
+        max-width: none;
+        transform: none;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 6px;
+        border-radius: 18px;
+        overflow: hidden;
+        transition: none;
+    }
+
+    #top-control-bar .control-bar-divider {
+        display: none;
+    }
+
+    #top-control-bar .control-bar-section {
+        gap: 4px;
+        min-width: 0;
+    }
+
+    #top-control-bar .control-bar-panels {
+        order: 0;
+        flex: 1 1 0;
+    }
+
+    #top-control-bar .control-bar-settings {
+        order: 1;
+        flex: 0 0 auto;
+        padding-left: 6px;
+        border-left: 1px solid var(--glass-border);
+    }
+
+    #top-control-bar .control-bar-views {
+        order: 2;
+        flex: 1 1 calc(100% - 72px);
+    }
+
+    #top-control-bar .control-bar-direction {
+        order: 3;
+        flex: 0 0 60px;
+    }
+
+    #top-control-bar .control-bar-panels,
+    #top-control-bar .control-bar-views {
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        scrollbar-width: thin;
+        scrollbar-color: var(--glass-border) transparent;
+    }
+
+    #top-control-bar .control-bar-section > * {
+        flex-shrink: 0;
+    }
+
+    #top-control-bar button,
+    #top-control-bar #up-select {
+        min-width: 44px;
+        min-height: 44px;
+        padding: 0 10px;
+        font-size: 12px;
+        touch-action: manipulation;
+    }
+
+    #top-control-bar #up-select {
+        width: 60px;
+        padding-right: 22px;
+        font-size: 16px;
+    }
+
+    #top-control-bar button:hover {
+        transform: none;
+    }
+
+    #top-control-bar .tool-button.active,
+    #top-control-bar .control-button.active {
+        background: var(--accent);
+        color: #fff;
+    }
+
+    /* Override desktop coordinates, including user drag/resize positions. */
+    #floating-files-panel,
+    #floating-joints-panel,
+    #floating-model-tree,
+    #floating-help-panel,
+    #code-editor-panel {
+        top: auto !important;
+        left: var(--mobile-left) !important;
+        right: var(--mobile-right) !important;
+        bottom: var(--mobile-bottom) !important;
+        width: auto !important;
+        min-width: 0;
+        height: min(44dvh, calc(100dvh - var(--mobile-toolbar-bottom) - var(--mobile-bottom))) !important;
+        min-height: 0;
+        max-width: none;
+        max-height: calc(100dvh - var(--mobile-toolbar-bottom) - var(--mobile-bottom)) !important;
+        margin: 0;
+        transform: none !important;
+        animation: none;
+        transition: opacity 0.2s ease !important;
+        z-index: 90 !important;
+    }
+
+    #floating-files-panel.maximized,
+    #floating-joints-panel.maximized,
+    #floating-model-tree.maximized,
+    #floating-help-panel.maximized,
+    #code-editor-panel.maximized {
+        top: var(--mobile-toolbar-bottom) !important;
+        height: auto !important;
+    }
+
+    #floating-help-panel,
+    #code-editor-panel {
+        height: min(64dvh, calc(100dvh - var(--mobile-toolbar-bottom) - var(--mobile-bottom))) !important;
+    }
+
+    .floating-panel-header,
+    .code-editor-header {
+        min-height: 52px;
+        padding: 6px 10px;
+        gap: 4px;
+        cursor: default;
+    }
+
+    .floating-panel-header button,
+    .code-editor-header button {
+        width: auto;
+        min-width: 36px;
+        height: 40px;
+        flex-shrink: 0;
+    }
+
+    #floating-joints-panel .floating-panel-header {
+        flex-wrap: wrap;
+        gap: 4px;
+        padding: 6px 10px;
+    }
+
+    #floating-joints-panel .floating-panel-header > span {
+        flex-basis: 100%;
+        padding: 4px 2px;
+    }
+
+    .joints-panel-controls {
+        width: 100%;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 3px;
+    }
+
+    #floating-joints-panel #unit-toggle button,
+    #floating-joints-panel #reset-joints-btn,
+    #floating-joints-panel #ignore-limits {
+        min-height: 36px;
+        height: auto;
+        padding: 0 8px;
+    }
+
+    #floating-joints-panel #unit-toggle {
+        padding: 2px;
+    }
+
+    .floating-panel .panel-maximize-btn,
+    .floating-panel .panel-close-btn {
+        position: static !important;
+        width: 40px !important;
+        height: 40px !important;
+        transform: none !important;
+    }
+
+    .code-editor-title {
+        flex: 1;
+    }
+
+    .code-editor-actions {
+        gap: 4px;
+    }
+
+    .code-editor-btn {
+        padding: 0 8px;
+    }
+
+    #code-editor-content {
+        min-height: 0;
+        padding: 6px;
+    }
+
+    .code-editor-filename-input,
+    .joint-extra-input,
+    .joint-value-input,
+    .joint-limit-min,
+    .joint-limit-max {
+        font-size: 16px;
+    }
+
+    .joint-value-input {
+        width: 70px;
+        min-height: 32px;
+    }
+
+    .joint-limit-min,
+    .joint-limit-max {
+        width: 56px;
+        min-height: 32px;
+    }
+
+    .tree-item-header {
+        min-height: 36px;
+    }
+
+    .joint-slider {
+        min-height: 32px;
+        touch-action: pan-y;
+    }
+
+    .floating-panel-content {
+        overscroll-behavior: contain;
+    }
+
+    #floating-help-panel .floating-panel-content {
+        padding: 12px;
+        overflow-wrap: anywhere;
+    }
+
+    .graph-controls-hint {
+        white-space: normal;
+        line-height: 1.5;
+    }
+
+    .load-files-btn,
+    .load-folder-btn {
+        min-height: 44px;
+    }
+
+    .github-progress-dialog {
+        min-width: 0;
+        width: calc(100% - 32px);
+        max-width: 400px;
+        padding: 20px;
+    }
+
+    #mujoco-simulation-bar {
+        top: var(--mobile-toolbar-bottom);
+        max-width: calc(100% - 24px);
+    }
+
+    #mujoco-simulation-bar button {
+        min-height: 40px;
+    }
+
+    #bottom-help-bar {
+        display: none;
+    }
+
+    #copyright-watermark {
+        bottom: max(5px, env(safe-area-inset-bottom));
+        width: calc(100% - 24px);
+        font-size: 9px;
+    }
+
+    #hover-info {
+        max-width: calc(100% - 24px);
+    }
+
+    #animation-workspace {
+        left: var(--mobile-left) !important;
+        right: var(--mobile-right) !important;
+        bottom: var(--mobile-bottom);
+        height: min(50dvh, calc(100dvh - var(--mobile-toolbar-bottom) - var(--mobile-bottom))) !important;
+        min-height: 0;
+        max-height: calc(100dvh - var(--mobile-toolbar-bottom) - var(--mobile-bottom));
+        animation: none;
+    }
+
+    #animation-workspace .animation-toolbar {
+        overflow-x: auto;
+        overflow-y: hidden;
+        min-height: 50px;
+        overscroll-behavior-x: contain;
+        scrollbar-width: thin;
+    }
+
+    .animation-toolbar > * {
+        flex-shrink: 0;
+    }
+
+    #animation-workspace .animation-button,
+    #animation-workspace .animation-icon-button,
+    #animation-workspace .animation-segmented button,
+    #animation-workspace .animation-select,
+    #animation-workspace .animation-chip {
+        min-height: 36px;
+        min-width: 36px;
+    }
+
+    #animation-workspace .animation-time-input {
+        min-height: 36px;
+        width: 76px;
+        font-size: 16px;
+    }
+
+    #animation-workspace .animation-popover-wrap {
+        position: static;
+    }
+
+    #animation-workspace .animation-primary-action {
+        background: var(--accent);
+        color: #fff;
+    }
+
+    #animation-workspace .animation-popover {
+        top: 106px;
+        left: 8px;
+        right: 8px;
+        width: auto;
+        min-width: 0;
+        max-height: calc(100% - 114px);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+    }
+
+    #animation-workspace .animation-popover button {
+        min-height: 40px;
+        white-space: normal;
+    }
+
+    .animation-guide {
+        flex-wrap: wrap;
+    }
+
+    .animation-dialog-fields select,
+    .animation-dialog-fields input[type="number"],
+    .animation-input-row select {
+        font-size: 16px;
+    }
+}
+
+@media (max-width: 1023px) and (max-height: 500px) {
+    #floating-files-panel,
+    #floating-joints-panel,
+    #floating-model-tree,
+    #floating-help-panel,
+    #code-editor-panel {
+        top: var(--mobile-toolbar-bottom) !important;
+        left: auto !important;
+        width: min(420px, 58vw) !important;
+        height: auto !important;
+    }
+
+    #floating-files-panel.maximized,
+    #floating-joints-panel.maximized,
+    #floating-model-tree.maximized,
+    #floating-help-panel.maximized,
+    #code-editor-panel.maximized {
+        left: var(--mobile-left) !important;
+        width: auto !important;
+    }
+
+    #animation-workspace {
+        top: var(--mobile-toolbar-bottom);
+        left: auto !important;
+        width: min(520px, 58vw) !important;
+        height: auto !important;
+    }
+}

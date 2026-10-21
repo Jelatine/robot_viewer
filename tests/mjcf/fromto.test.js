@@ -9,8 +9,11 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { DOMParser } from 'linkedom';
 import * as THREE from 'three';
 import { MJCFAdapter } from '../../src/adapters/MJCFAdapter.js';
+
+globalThis.DOMParser = DOMParser;
 
 const EPS = 1e-6;
 
@@ -128,3 +131,59 @@ test('zero length fromto produces a valid identity transform', () => {
         .applyQuaternion(new THREE.Quaternion().fromArray(frame.quaternion));
     assert.ok(axis.distanceTo(new THREE.Vector3(0, 0, 1)) < EPS);
 });
+
+for (const type of ['capsule', 'cylinder']) {
+    test(`${type} visual and collision meshes retain fromto endpoints after full parsing`, async () => {
+        const cases = [
+            [0.02, 0, 0, 0.02, 0, -0.08],
+            [-0.054, 0, -0.025, 0.132, 0, -0.025],
+            [0.07, 0, 0, 0.15, -0.02, 0.03],
+            [0.1, 0.2, 0.3, 0.1, 0.2, 0.3]
+        ];
+        const geoms = cases.map((points, i) => [
+            `<geom name="visual_${i}" type="${type}" size=".01" fromto="${points.join('  \t')}"
+                pos="9 8 7" euler="30 45 60"/>`,
+            `<geom name="collision_${i}" type="${type}" size=".01" fromto="${points.join('\n ')}"
+                pos="9 8 7" euler="30 45 60" group="3"/>`
+        ].join('')).join('');
+        const model = await MJCFAdapter.parse(`<mujoco><worldbody>
+            <body name="arm" pos="1 2 3" euler="10 20 30">${geoms}</body>
+            </worldbody></mujoco>`);
+        const link = model.getLink('arm');
+        assert.equal(link.visuals.length, cases.length);
+        assert.equal(link.collisions.length, cases.length);
+        model.threeObject.updateMatrixWorld(true);
+
+        for (const [i, points] of cases.entries()) {
+            const p1 = new THREE.Vector3(...points.slice(0, 3));
+            const p2 = new THREE.Vector3(...points.slice(3, 6));
+            const height = p1.distanceTo(p2);
+            const expected = [p1, p2].map(point => link.threeObject.localToWorld(point));
+            const meshes = [link.visuals[i].threeObject, link.collisions[i].threeObject.children[0]];
+            for (const mesh of meshes) {
+                for (const [end, z] of [-height / 2, height / 2].entries()) {
+                    const actual = mesh.localToWorld(new THREE.Vector3(0, 0, z));
+                    assert.ok(actual.distanceTo(expected[end]) < EPS,
+                        `${mesh.name} endpoint ${end}: ${actual.toArray()} != ${expected[end].toArray()}`);
+                }
+                assert.ok(mesh.quaternion.toArray().every(Number.isFinite));
+            }
+        }
+    });
+
+    test(`${type} malformed fromto falls back to size and the explicit origin`, async () => {
+        const model = await MJCFAdapter.parse(`<mujoco><worldbody><body name="arm">
+            <geom type="${type}" size=".02 .15" fromto="0 0 0 0 0 bad" pos="1 2 3" euler="0 90 0"/>
+            <geom type="${type}" size=".02 .15" pos="1 2 3" euler="0 90 0" group="3"/>
+            </body></worldbody></mujoco>`);
+        const link = model.getLink('arm');
+        for (const geom of [...link.visuals, ...link.collisions]) {
+            assert.equal(geom.geometry.fromto, undefined);
+            assert.deepEqual(geom.geometry.size, { radius: .02, height: .3 });
+            const mesh = geom.threeObject.isMesh ? geom.threeObject : geom.threeObject.children[0];
+            assert.deepEqual(mesh.position.toArray(), [1, 2, 3]);
+            const axis = new THREE.Vector3(0, 0, 1).applyQuaternion(mesh.quaternion);
+            assert.ok(axis.distanceTo(new THREE.Vector3(1, 0, 0)) < EPS);
+        }
+    });
+}
