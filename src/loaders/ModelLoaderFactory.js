@@ -759,7 +759,7 @@ export class ModelLoaderFactory {
     /**
      * Set joint angle (universal method)
      */
-    static setJointAngle(model, jointName, angle, ignoreLimits = false) {
+    static setJointAngle(model, jointName, angle, ignoreLimits = false, updateMatrices = true) {
         const joint = model.getJoint(jointName);
         if (!joint) {
             console.warn(`Joint ${jointName} does not exist`);
@@ -777,11 +777,11 @@ export class ModelLoaderFactory {
             URDFAdapter.setJointAngle(joint, angle, ignoreLimits);
         } else {
             // MJCF or USD format
-            MJCFAdapter.setJointAngle(joint, angle);
+            MJCFAdapter.setJointAngle(joint, angle, updateMatrices);
         }
 
         // Ensure model matrix is updated
-        if (model.threeObject) {
+        if (updateMatrices && model.threeObject) {
             model.threeObject.updateMatrixWorld(true);
         }
     }

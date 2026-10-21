@@ -41,6 +41,7 @@
     "xacro-parser": "^0.3.11"
   },
   "devDependencies": {
+    "linkedom": "0.18.12",
     "terser": "^5.26.0",
     "vite": "^4.5.0"
   }

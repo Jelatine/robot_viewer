@@ -9,6 +9,9 @@ import { MathUtils } from '../utils/MathUtils.js';
 import { CoordinateAxesManager } from './CoordinateAxesManager.js';
 import { InertialVisualization } from './InertialVisualization.js';
 import { VisualizationManager } from './VisualizationManager.js';
+import { MJCFAdapter } from '../adapters/MJCFAdapter.js';
+import { cleanFilePath, resolveFileFromMap } from '../utils/FileUtils.js';
+import { getMujocoRuntime } from '../utils/MujocoRuntime.js';
 
 export class MujocoSimulationManager {
     constructor(sceneManager) {
@@ -51,13 +54,7 @@ export class MujocoSimulationManager {
         }
 
         try {
-            // Import from mujoco-js npm package
-            const load_mujoco = (await import('mujoco-js/dist/mujoco_wasm.js')).default;
-            this.mujoco = await load_mujoco();
-
-            // Setup virtual file system
-            this.mujoco.FS.mkdir('/working');
-            this.mujoco.FS.mount(this.mujoco.MEMFS, { root: '.' }, '/working');
+            this.mujoco = await getMujocoRuntime();
 
             return this.mujoco;
         } catch (error) {
@@ -86,16 +83,24 @@ export class MujocoSimulationManager {
             // Save original model
             this.originalModel = originalModel;
 
-            // Add ground plane to XML if not present
-            const modifiedXml = this.addGroundPlane(xmlContent);
+            // Compile the same expanded scene that the viewer imported.
+            // scene.xml commonly contains only an include and a floor.
+            const basePath = originalModel?.userData?.basePath || '';
+            const expanded = originalModel?.userData?.compiledMJCF || await MJCFAdapter.processIncludes(xmlContent, fileMap, basePath);
+            const doc = new DOMParser().parseFromString(expanded, 'text/xml');
+            MJCFAdapter.mergeTopLevelSections(doc);
+            const sceneXml = new XMLSerializer().serializeToString(doc);
+            const modifiedXml = this.addGroundPlane(sceneXml);
 
             // Write XML file to virtual file system
-            const xmlPath = `/working/${filename}`;
+            const modelFile = filename.includes('/') ? cleanFilePath(filename) : cleanFilePath(`${basePath}/${filename}`);
+            const xmlPath = `/working/${modelFile}`;
+            this.ensureDir(xmlPath);
             this.mujoco.FS.writeFile(xmlPath, modifiedXml);
 
             // Write dependency files (mesh, texture, etc.)
             if (fileMap && fileMap.size > 0) {
-                await this.writeAssetsToVFS(xmlContent, filename, fileMap);
+                await this.writeAssetsToVFS(sceneXml, modelFile, fileMap);
             }
 
             // Load model (compatible with old and new API)
@@ -220,190 +225,35 @@ export class MujocoSimulationManager {
      * Write asset files to MuJoCo virtual file system
      */
     async writeAssetsToVFS(xmlContent, filename, fileMap) {
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(xmlContent, 'application/xml');
-
-        // Get compiler settings
-        const compilerEl = doc.querySelector('compiler');
-        const meshdir = compilerEl?.getAttribute('meshdir') || 'assets';
-        const texturedir = compilerEl?.getAttribute('texturedir') || meshdir;
-
-        // Parse all asset references
-        const assetPaths = new Set();
-        const meshAssetMap = new Map(); // Map from resolved path to original mesh element
-
-        // Parse mesh files
-        doc.querySelectorAll('mesh[file]').forEach(el => {
-            const file = el.getAttribute('file');
-            if (file) {
-                const resolvedPath = this.resolvePath(filename, meshdir, file);
-                assetPaths.add(resolvedPath);
-                meshAssetMap.set(resolvedPath, { original: file, element: el });
+        const doc = new DOMParser().parseFromString(xmlContent, 'application/xml');
+        const compiler = doc.querySelector('compiler');
+        const assetdir = compiler?.getAttribute('assetdir') || '';
+        const meshdir = compiler?.getAttribute('meshdir') ?? assetdir;
+        const texturedir = compiler?.getAttribute('texturedir') ?? assetdir;
+        const strippath = compiler?.getAttribute('strippath') === 'true';
+        const modelDir = filename.includes('/') ? filename.slice(0, filename.lastIndexOf('/')) : '';
+        const paths = new Set();
+        for (const element of doc.querySelectorAll('asset > mesh, asset > texture, asset > hfield, asset > skin')) {
+            for (const attribute of ['file', 'fileleft', 'fileright', 'fileup', 'filedown', 'filefront', 'fileback']) {
+                if (!element.hasAttribute(attribute)) continue;
+                let file = element.getAttribute(attribute).replace(/\\/g, '/');
+                if (strippath) file = file.split('/').pop();
+                const directory = element.tagName === 'texture' ? texturedir : meshdir;
+                paths.add(MJCFAdapter.resolveAssetFilePath(file, modelDir, directory));
             }
-        });
-
-        // Parse texture files
-        doc.querySelectorAll('texture[file]').forEach(el => {
-            const file = el.getAttribute('file');
-            if (file) {
-                assetPaths.add(this.resolvePath(filename, texturedir, file));
-            }
-        });
-
-        // Write files to VFS
-        let successCount = 0;
-        const missingFiles = [];
-        const failedFiles = [];
-
-        for (const assetPath of assetPaths) {
-            // Extract all possible top-level directory prefixes from fileMap keys
-            const topDirs = new Set();
-            for (const key of fileMap.keys()) {
-                if (key.startsWith('/')) {
-                    const parts = key.split('/');
-                    if (parts.length > 1) {
-                        topDirs.add(parts[1]); // e.g., go2_description
-                    }
-                }
-            }
-
-            // Try multiple path variations to find file
-            const pathVariations = [
-                assetPath,                          // assets/base_0.obj
-                '/' + assetPath,                    // /assets/base_0.obj
-                'mjcf/' + assetPath,                // mjcf/assets/base_0.obj
-                '/mjcf/' + assetPath,               // /mjcf/assets/base_0.obj
-                assetPath.split('/').pop()          // base_0.obj
-            ];
-
-            // Add paths including top-level directories
-            for (const topDir of topDirs) {
-                pathVariations.push(`/${topDir}/mjcf/${assetPath}`);  // /go2_description/mjcf/assets/base_0.obj
-                pathVariations.push(`${topDir}/mjcf/${assetPath}`);   // go2_description/mjcf/assets/base_0.obj
-            }
-
-            let file = null;
-            let matchedKey = null;
-
-            // First try exact matches
-            for (const variation of pathVariations) {
-                file = fileMap.get(variation);
-                if (file) {
-                    matchedKey = variation;
-                    break;
-                }
-            }
-
-            // If not found, try case-insensitive matching
+        }
+        const missing = [];
+        for (const path of paths) {
+            const file = resolveFileFromMap(path, fileMap);
             if (!file) {
-                const assetPathLower = assetPath.toLowerCase();
-                const fileNameOnly = assetPath.split('/').pop().toLowerCase();
-
-                for (const [key, value] of fileMap.entries()) {
-                    const keyLower = key.toLowerCase();
-                    const keyFileName = key.split('/').pop().toLowerCase();
-
-                    // Match by full path or filename
-                    if (keyLower === assetPathLower ||
-                        keyLower.endsWith('/' + assetPathLower) ||
-                        keyFileName === fileNameOnly ||
-                        keyLower.includes(assetPathLower)) {
-                        file = value;
-                        matchedKey = key;
-                        break;
-                    }
-                }
+                missing.push(path);
+                continue;
             }
-
-            if (file) {
-                try {
-                    const vfsPath = `/working/${assetPath}`;
-                    this.ensureDir(vfsPath);
-
-                    const ext = assetPath.toLowerCase().split('.').pop();
-                    const binaryExts = ['obj', 'stl', 'png', 'jpg', 'jpeg', 'bmp'];
-
-                    if (binaryExts.includes(ext)) {
-                        const buffer = await file.arrayBuffer();
-                        this.mujoco.FS.writeFile(vfsPath, new Uint8Array(buffer));
-                    } else {
-                        const text = await file.text();
-                        this.mujoco.FS.writeFile(vfsPath, text);
-                    }
-
-                    // Verify file was written successfully
-                    try {
-                        const stat = this.mujoco.FS.stat(vfsPath);
-                        if (!stat) {
-                            throw new Error('File write verification failed');
-                        }
-                    } catch (verifyError) {
-                        throw new Error('File write verification failed');
-                    }
-
-                    successCount++;
-                } catch (error) {
-                    const meshInfo = meshAssetMap.get(assetPath);
-                    const displayPath = meshInfo ? meshInfo.original : assetPath;
-                    failedFiles.push({ path: displayPath, error: error.message });
-                }
-            } else {
-                const meshInfo = meshAssetMap.get(assetPath);
-                const displayPath = meshInfo ? meshInfo.original : assetPath;
-                missingFiles.push(displayPath);
-            }
+            const vfsPath = `/working/${path}`;
+            this.ensureDir(vfsPath);
+            this.mujoco.FS.writeFile(vfsPath, new Uint8Array(await file.arrayBuffer()));
         }
-
-        // If critical mesh files are missing, throw detailed error
-        if (missingFiles.length > 0 || failedFiles.length > 0) {
-            let errorMsg = 'MuJoCo asset files loading failed:\n';
-
-            if (missingFiles.length > 0) {
-                errorMsg += `\nMissing files (${missingFiles.length}):\n`;
-                missingFiles.slice(0, 10).forEach(path => {
-                    errorMsg += `  - ${path}\n`;
-                });
-                if (missingFiles.length > 10) {
-                    errorMsg += `  ... ${missingFiles.length - 10} more files missing\n`;
-                }
-            }
-
-            if (failedFiles.length > 0) {
-                errorMsg += `\nFailed to write files (${failedFiles.length}):\n`;
-                failedFiles.slice(0, 10).forEach(({ path, error }) => {
-                    errorMsg += `  - ${path}: ${error}\n`;
-                });
-                if (failedFiles.length > 10) {
-                    errorMsg += `  ... ${failedFiles.length - 10} more files failed\n`;
-                }
-            }
-
-            errorMsg += `\nSuccessfully loaded: ${successCount} files`;
-            errorMsg += `\n\nPlease ensure all mesh files are included in the file list.`;
-
-            throw new Error(errorMsg);
-        }
-    }
-
-    /**
-     * Resolve asset path
-     */
-    resolvePath(xmlFile, baseDir, file) {
-        // Get directory where XML file is located
-        const xmlDir = xmlFile.includes('/') ? xmlFile.substring(0, xmlFile.lastIndexOf('/')) : '';
-
-        // If file is absolute path (starts with /), use directly
-        if (file.startsWith('/')) {
-            return file.substring(1);
-        }
-
-        // Combine path
-        const parts = [];
-        if (xmlDir) parts.push(xmlDir);
-        if (baseDir && baseDir !== '.') parts.push(baseDir);
-        parts.push(file);
-
-        return parts.join('/');
+        if (missing.length) throw new Error(`MuJoCo asset files not found:\n${missing.join('\n')}`);
     }
 
     /**
@@ -982,6 +832,9 @@ export class MujocoSimulationManager {
                 };
 
                 const boxData = MathUtils.computeInertiaBox(inertia);
+                // Fixed bases may intentionally have zero diagonal inertia.
+                // Their optional inertia overlay must not prevent simulation.
+                if (!boxData) continue;
                 const boxGeometry = MathUtils.createInertiaBoxGeometry(
                     boxData.width, boxData.height, boxData.depth
                 );
