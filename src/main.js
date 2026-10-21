@@ -19,7 +19,9 @@ import { i18n } from './utils/i18n.js';
 import { PoseController } from './animation/runtime/PoseController.js';
 import { AnimationWorkspace } from './animation/ui/AnimationWorkspace.js';
 import { MobileLayout } from './ui/MobileLayout.js';
+import { ViewGizmo } from './ui/ViewGizmo.js';
 import './ui/mobile-layout.css';
+import './ui/view-gizmo.css';
 
 // Expose d3 globally for PanelManager
 window.d3 = d3;
@@ -124,6 +126,7 @@ class App {
             }
 
             this.sceneManager = new SceneManager(canvas);
+            this.sceneManager.viewGizmo = new ViewGizmo(this.sceneManager, canvas.parentElement);
             window.sceneManager = this.sceneManager; // For debugging
 
             this.poseController = new PoseController(this.sceneManager);
@@ -363,6 +366,7 @@ class App {
 
         // Check if USD WASM model
         if (model?.userData?.isUSDWASM) {
+            this.sceneManager.viewGizmo.setVisible(false);
             // Hide Three.js canvas, show USD viewer
             const canvas = document.getElementById('canvas');
             const usdContainer = document.getElementById('usd-viewer-container');
@@ -395,6 +399,7 @@ class App {
         }
 
         // If regular model, ensure USD viewer is hidden
+        this.sceneManager.viewGizmo.setVisible(true);
         let canvas = document.getElementById('canvas');
         const usdContainer = document.getElementById('usd-viewer-container');
         if (canvas && usdContainer) {
@@ -897,6 +902,7 @@ class App {
      */
     handleLanguageChanged(lang) {
         i18n.setLanguage(lang);
+        this.sceneManager?.viewGizmo?.refreshLanguage();
         this.animationWorkspace?.refreshLanguage();
 
         // Update code editor save status text

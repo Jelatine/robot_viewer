@@ -4,7 +4,7 @@
 
 # Robot Viewer
 
-[![Version](https://img.shields.io/badge/version-v1.4.0-blue.svg)](https://github.com/fan-ziqi/robot_viewer)
+[![Version](https://img.shields.io/badge/version-v1.5.0-blue.svg)](https://github.com/fan-ziqi/robot_viewer)
 [![License](https://img.shields.io/badge/license-Apache--2.0-yellow.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-web-orange.svg)](https://github.com/fan-ziqi/robot_viewer)
 [![JavaScript](https://img.shields.io/badge/language-JavaScript-f1e05a.svg)](https://github.com/fan-ziqi/robot_viewer)
@@ -28,6 +28,7 @@
 - **Robot Types**: Serial, branched and MJCF parallel mechanisms with `connect`, `weld` and joint equality constraints
 - **Visualization Tools**: Visual/collision geometry, inertia tensors, center of mass, coordinate frames, joint axes, shadows, ground grid visibility, coordinate system orientation
 - **Interactive Controls**: Drag joints in real-time, adjust model poses with linked motion for parallel mechanisms
+- **Axis Views**: Blender-style orientation gizmo in the upper-right corner. Click an X/Y/Z endpoint to view from that positive or negative model axis; click the aligned endpoint again to flip to the opposite side. The view keeps its orbit target and distance and follows the selected up-axis. Available in the Three.js viewer (URDF, Xacro, MJCF and meshes).
 - **Animation Editor (Experimental)**: Multi-clip dope sheet and Bézier graph editor with auto-key, multi-selection, undo/redo, play/record ranges, event and media tracks, pose snapshots, audio-reactive keys, live-input recording, autosave, and portable `.robotanim.json` projects
 - **Measurement Tools**: Measure distances between joints and links with 3D visualization, display X/Y/Z axis projections and total distance, support ground height measurement
 - **Code Editor**: Built-in CodeMirror editor with syntax highlighting and live preview

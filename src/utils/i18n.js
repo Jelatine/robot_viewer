@@ -25,6 +25,9 @@ export const translations = {
         'help': '帮助',
         'theme': '主题',
         'language': '语言',
+        'viewOrientation': '视角方向',
+        'alignViewAxis': '沿轴查看',
+        'flipViewAxis': '再次点击查看反面',
 
         // 面板标题
         'fileList': '文件',
@@ -213,6 +216,9 @@ export const translations = {
         'help': 'Help',
         'theme': 'Theme',
         'language': 'Language',
+        'viewOrientation': 'View orientation',
+        'alignViewAxis': 'View along axis',
+        'flipViewAxis': 'Click again for the opposite view',
 
         // Panel titles
         'fileList': 'Files',

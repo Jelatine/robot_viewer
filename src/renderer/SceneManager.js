@@ -135,6 +135,7 @@ export class SceneManager {
         }
         // Render immediately (for scenes requiring immediate update)
         this.renderer.render(this.scene, this.camera);
+        this.viewGizmo?.update();
         this._dirty = false;
         return true;
     }
@@ -479,6 +480,47 @@ export class SceneManager {
         this.camera.updateProjectionMatrix();
 
         this.redraw();
+    }
+
+    /** Coordinate frame used by the visible model, before its own root transform. */
+    getViewAxesQuaternion() {
+        const parent = this.currentModel?.threeObject?.parent;
+        if (parent) return parent.getWorldQuaternion(new THREE.Quaternion());
+        if (this.world) return this.world.getWorldQuaternion(new THREE.Quaternion());
+
+        // The empty viewer uses the same +Z-up frame as the default robot import.
+        return new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+    }
+
+    /** Look from a signed model axis towards the current orbit target. */
+    alignCameraToAxis(axis) {
+        if (typeof axis !== 'string' || !/^[+-]?[XYZ]$/i.test(axis)) return false;
+        const name = axis.slice(-1).toUpperCase();
+        const frame = this.getViewAxesQuaternion();
+        const direction = new THREE.Vector3();
+        direction[name.toLowerCase()] = axis.startsWith('-') ? -1 : 1;
+        direction.applyQuaternion(frame);
+
+        const offset = this.camera.position.clone().sub(this.controls.target);
+        const distance = offset.length() || 1;
+        // Opposite endpoints overlap on screen in an aligned view. Clicking
+        // the facing endpoint again makes the reverse view reachable.
+        if (offset.clone().normalize().dot(direction) > 1 - 1e-8) direction.negate();
+
+        if (Math.abs(direction.y) > 1 - 1e-8) {
+            // OrbitControls clamps its polar angle away from the singularity.
+            // Choose that tiny tilt explicitly so top/bottom views have a
+            // stable roll, with another model axis pointing up on screen.
+            const screenUp = new THREE.Vector3(0, name === 'Z' ? 1 : 0, name === 'Z' ? 0 : 1)
+                .applyQuaternion(frame);
+            direction.addScaledVector(screenUp, -Math.sign(direction.y) * 1e-6).normalize();
+        }
+
+        this.camera.position.copy(this.controls.target).addScaledVector(direction, distance);
+        this.controls.update();
+        this.camera.updateMatrixWorld();
+        this.redraw();
+        return true;
     }
 
     /**
