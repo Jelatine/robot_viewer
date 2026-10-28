@@ -19,6 +19,10 @@ import { i18n } from './utils/i18n.js';
 import { PoseController } from './animation/runtime/PoseController.js';
 import { AnimationWorkspace } from './animation/ui/AnimationWorkspace.js';
 import { BridgePanel } from './bridge/ui/BridgePanel.js';
+import { MobileLayout } from './ui/MobileLayout.js';
+import { ViewGizmo } from './ui/ViewGizmo.js';
+import './ui/mobile-layout.css';
+import './ui/view-gizmo.css';
 
 // Expose d3 globally for PanelManager
 window.d3 = d3;
@@ -144,6 +148,7 @@ class App {
             }
 
             this.sceneManager = new SceneManager(canvas);
+            this.sceneManager.viewGizmo = new ViewGizmo(this.sceneManager, canvas.parentElement);
             window.sceneManager = this.sceneManager; // For debugging
 
             this.poseController = new PoseController(this.sceneManager);
@@ -316,6 +321,8 @@ class App {
             // Update editor button visibility
             this.updateEditorButtonVisibility();
 
+            this.mobileLayout = new MobileLayout(this.animationWorkspace);
+
             // Start render loop
             this.animate();
 
@@ -397,6 +404,7 @@ class App {
 
         // Check if USD WASM model
         if (model?.userData?.isUSDWASM) {
+            this.sceneManager.viewGizmo.setVisible(false);
             // Hide Three.js canvas, show USD viewer
             const canvas = document.getElementById('canvas');
             const usdContainer = document.getElementById('usd-viewer-container');
@@ -429,6 +437,7 @@ class App {
         }
 
         // If regular model, ensure USD viewer is hidden
+        this.sceneManager.viewGizmo.setVisible(true);
         let canvas = document.getElementById('canvas');
         const usdContainer = document.getElementById('usd-viewer-container');
         if (canvas && usdContainer) {
@@ -615,9 +624,10 @@ class App {
         if (!this._isReloading && !isMesh) {
             const editorPanel = document.getElementById('code-editor-panel');
             if (editorPanel && this.codeEditorManager) {
-                editorPanel.classList.add('visible');
+                // Keep the mobile viewer on its current drawer after loading.
+                if (!this.mobileLayout?.media.matches) editorPanel.classList.add('visible');
                 const openEditorBtn = document.getElementById('open-editor-btn');
-                if (openEditorBtn) {
+                if (openEditorBtn && editorPanel.classList.contains('visible')) {
                     openEditorBtn.classList.add('active');
                 }
                 this.codeEditorManager.loadFile(file);
@@ -930,6 +940,7 @@ class App {
      */
     handleLanguageChanged(lang) {
         i18n.setLanguage(lang);
+        this.sceneManager?.viewGizmo?.refreshLanguage();
         this.animationWorkspace?.refreshLanguage();
         this.bridgePanel?.refreshLanguage();
 
@@ -1071,12 +1082,17 @@ class App {
         if (this.sceneManager) {
             this.sceneManager.update();
 
-            // Update MuJoCo simulation
-            if (this.mujocoSimulationManager && this.mujocoSimulationManager.hasScene()) {
+            // A running simulation changes scene transforms every frame. A
+            // paused or absent simulation leaves the scene clean, allowing the
+            // renderer (and discrete GPU) to remain idle.
+            const simulationRunning =
+                this.mujocoSimulationManager?.isSimulationRunning() === true;
+            if (simulationRunning) {
                 this.mujocoSimulationManager.update(performance.now());
+                this.sceneManager.redraw();
             }
 
-            this.sceneManager.render();
+            this.sceneManager.renderIfNeeded();
         }
     }
 }

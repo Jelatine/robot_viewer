@@ -1,3 +1,4 @@
+import { isScalarJoint } from '../../models/UnifiedRobotModel.js';
 const SCHEMA_VERSION = 2;
 const DEFAULT_DURATION_MS = 10000;
 const MAX_DURATION_MS = 4 * 60 * 60 * 1000;
@@ -165,7 +166,7 @@ export class AnimationStore {
         const jointNames = [];
         const jointDefinitions = {};
         model?.joints?.forEach((joint, jointName) => {
-            if (joint.type !== 'fixed') {
+            if (isScalarJoint(joint)) {
                 jointNames.push(jointName);
                 jointDefinitions[jointName] = {
                     lower: Number.isFinite(joint.limits?.lower) ? joint.limits.lower : -Math.PI,

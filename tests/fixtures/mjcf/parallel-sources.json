@@ -1,0 +1,38 @@
+{
+  "robotiq_2f85": {
+    "repository": "https://github.com/google-deepmind/mujoco_menagerie",
+    "revision": "cda5236f98383f6fbaa4820c6b18dba892cd087f",
+    "file": "2f85.xml",
+    "sha256": "d48aca5f9151798ffd38111ce4e8b2081f3ec2d4f525161b33643451580010de"
+  },
+  "stewart_platform": {
+    "repository": "https://github.com/duccuongvu/stewart_platform_mujoco",
+    "revision": "b0195ba9f40f6e0876220be1712eb47f5fc24025",
+    "file": "stewart_platform.xml",
+    "sha256": "ec49c9f13fa8cf9a040cc5d3f573252250cae6c6342a88cd3cd8cfe12d2efbee"
+  },
+  "agility_cassie": {
+    "repository": "https://github.com/google-deepmind/mujoco_menagerie",
+    "revision": "cda5236f98383f6fbaa4820c6b18dba892cd087f",
+    "file": "cassie.xml",
+    "sha256": "92ec84d23a0f62a848b4d646fc9197cad3b0c518bb6cb1aafe241b3db88dd885"
+  },
+  "robotiq_2f85_v4": {
+    "repository": "https://github.com/google-deepmind/mujoco_menagerie",
+    "revision": "cda5236f98383f6fbaa4820c6b18dba892cd087f",
+    "file": "2f85.xml",
+    "sha256": "8d4a4f840ff5f928d56e387a8325d1f34437b35f72b82792e4d46f8de879e133"
+  },
+  "toddlerbot_2xc": {
+    "repository": "https://github.com/google-deepmind/mujoco_menagerie",
+    "revision": "cda5236f98383f6fbaa4820c6b18dba892cd087f",
+    "file": "toddlerbot_2xc.xml",
+    "sha256": "2c89e8fc7161f432791bb5885295088c24ece8839f9111237fa294684a9682d4"
+  },
+  "iit_softfoot": {
+    "repository": "https://github.com/google-deepmind/mujoco_menagerie",
+    "revision": "cda5236f98383f6fbaa4820c6b18dba892cd087f",
+    "file": "softfoot.xml",
+    "sha256": "8783502ac1e336a7e154b0a0fbf255473beed9115a0900e6f42549b753a1a5d3"
+  }
+}

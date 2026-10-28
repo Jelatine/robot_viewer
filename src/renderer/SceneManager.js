@@ -21,7 +21,6 @@ export class SceneManager {
 
         // On-demand rendering flags
         this._dirty = false;
-        this._pendingRender = false;
         this._renderingPaused = false;
 
         // Event system
@@ -107,42 +106,12 @@ export class SceneManager {
         // Window resize - use ResizeObserver to listen for canvas container size changes
         this.setupResizeObserver();
 
-        // Start continuous render loop
-        this.startRenderLoop();
-
-        // Render immediately to show initial scene
+        // The application owns the single animation loop. Mark the initial
+        // scene dirty so its first tick renders it.
         this.redraw();
     }
 
     // ==================== Render Loop ====================
-
-    /**
-     * Start continuous render loop (borrowed from urdf-loaders implementation)
-     */
-    startRenderLoop() {
-        const renderLoop = () => {
-            // Only render when needed (controlled by _dirty flag)
-            if (this._dirty) {
-                this.renderer.render(this.scene, this.camera);
-                this._dirty = false;
-            }
-            this._renderLoopId = requestAnimationFrame(renderLoop);
-        };
-        renderLoop();
-    }
-
-    stopRenderLoop() {
-        if (this._renderLoopId) {
-            cancelAnimationFrame(this._renderLoopId);
-            this._renderLoopId = null;
-        }
-
-        // Clean up ResizeObserver
-        if (this.resizeObserver) {
-            this.resizeObserver.disconnect();
-            this.resizeObserver = null;
-        }
-    }
 
     /**
      * Mark scene as needing re-render (on-demand rendering)
@@ -162,11 +131,23 @@ export class SceneManager {
     render() {
         // If rendering is paused, don't render
         if (this._renderingPaused) {
-            return;
+            return false;
         }
         // Render immediately (for scenes requiring immediate update)
         this.renderer.render(this.scene, this.camera);
+        this.viewGizmo?.update();
         this._dirty = false;
+        return true;
+    }
+
+    /**
+     * Render a frame only when scene state has changed.
+     */
+    renderIfNeeded() {
+        if (!this._dirty) {
+            return false;
+        }
+        return this.render();
     }
 
     // ==================== Model Management ====================
@@ -218,7 +199,7 @@ export class SceneManager {
         try {
             if (model.threeObject) {
                 model.threeObject.updateMatrixWorld(true);
-                const bbox = new THREE.Box3().setFromObject(model.threeObject);
+                const bbox = this.getModelBoundingBox(model.threeObject);
                 if (!bbox.isEmpty()) {
                     const size = bbox.getSize(new THREE.Vector3());
                     modelSize = Math.max(size.x, size.y, size.z);
@@ -320,6 +301,55 @@ export class SceneManager {
     // ==================== Environment & Camera ====================
 
     /**
+     * Calculate renderable model bounds while ignoring display stand-ins for
+     * unbounded scene primitives (for example an infinite MJCF floor plane).
+     * Such meshes still render, but must not make a small robot disappear when
+     * the camera auto-fits the complete scene.
+     */
+    getModelBoundingBox(object) {
+        const bounds = new THREE.Box3();
+        const childBounds = new THREE.Box3();
+        let hasExcludedGeometry = false;
+
+        object.updateWorldMatrix(true, true);
+        object.traverse(child => {
+            if (!child.geometry ||
+                (!child.isMesh && !child.isLine && !child.isPoints)) {
+                return;
+            }
+
+            // Three.js Box3.setFromObject includes invisible descendants. For
+            // framing, hidden collision bodies and helper axes must not count.
+            let current = child;
+            while (current) {
+                if (!current.visible || current.userData?.excludeFromBounds) {
+                    hasExcludedGeometry = hasExcludedGeometry ||
+                        !!current.userData?.excludeFromBounds;
+                    return;
+                }
+                if (current === object) break;
+                current = current.parent;
+            }
+
+            if (!child.geometry.boundingBox) {
+                child.geometry.computeBoundingBox();
+            }
+            if (!child.geometry.boundingBox) return;
+
+            childBounds.copy(child.geometry.boundingBox).applyMatrix4(child.matrixWorld);
+            bounds.union(childBounds);
+        });
+
+        // A floor-only file should still be frameable. The fallback is only
+        // used when every renderable primitive was deliberately excluded.
+        if (bounds.isEmpty() && hasExcludedGeometry) {
+            bounds.setFromObject(object, true);
+        }
+
+        return bounds;
+    }
+
+    /**
      * Update environment (reference urdf-loaders' _updateEnvironment)
      * Auto-adjust ground position to robot lowest point, and update camera focus
      * @param {boolean} fitCamera - Whether to auto-adjust camera view (default false)
@@ -338,8 +368,7 @@ export class SceneManager {
         model.threeObject.updateMatrixWorld(true);
 
         // Directly calculate entire model's bounding box in scene global coordinate system
-        const bboxGlobal = new THREE.Box3();
-        bboxGlobal.setFromObject(model.threeObject, true);
+        const bboxGlobal = this.getModelBoundingBox(model.threeObject);
 
         if (bboxGlobal.isEmpty()) {
             return;
@@ -425,7 +454,8 @@ export class SceneManager {
         const isSingleMesh = !this.currentModel || !this.currentModel.joints || this.currentModel.joints.size === 0;
         const distanceMultiplier = isSingleMesh ? 2.5 : 1.8;  // Single mesh: 2.5x distance, robot model: 1.8x distance
 
-        const distance = maxDim / (2 * Math.tan(fov / 2)) * distanceMultiplier;
+        const limitingFovTangent = Math.tan(fov / 2) * Math.min(1, this.camera.aspect);
+        const distance = maxDim / (2 * limitingFovTangent) * distanceMultiplier;
 
         // Side-back oblique view:
         // - From right-back (X positive + Z negative)
@@ -450,6 +480,47 @@ export class SceneManager {
         this.camera.updateProjectionMatrix();
 
         this.redraw();
+    }
+
+    /** Coordinate frame used by the visible model, before its own root transform. */
+    getViewAxesQuaternion() {
+        const parent = this.currentModel?.threeObject?.parent;
+        if (parent) return parent.getWorldQuaternion(new THREE.Quaternion());
+        if (this.world) return this.world.getWorldQuaternion(new THREE.Quaternion());
+
+        // The empty viewer uses the same +Z-up frame as the default robot import.
+        return new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+    }
+
+    /** Look from a signed model axis towards the current orbit target. */
+    alignCameraToAxis(axis) {
+        if (typeof axis !== 'string' || !/^[+-]?[XYZ]$/i.test(axis)) return false;
+        const name = axis.slice(-1).toUpperCase();
+        const frame = this.getViewAxesQuaternion();
+        const direction = new THREE.Vector3();
+        direction[name.toLowerCase()] = axis.startsWith('-') ? -1 : 1;
+        direction.applyQuaternion(frame);
+
+        const offset = this.camera.position.clone().sub(this.controls.target);
+        const distance = offset.length() || 1;
+        // Opposite endpoints overlap on screen in an aligned view. Clicking
+        // the facing endpoint again makes the reverse view reachable.
+        if (offset.clone().normalize().dot(direction) > 1 - 1e-8) direction.negate();
+
+        if (Math.abs(direction.y) > 1 - 1e-8) {
+            // OrbitControls clamps its polar angle away from the singularity.
+            // Choose that tiny tilt explicitly so top/bottom views have a
+            // stable roll, with another model axis pointing up on screen.
+            const screenUp = new THREE.Vector3(0, name === 'Z' ? 1 : 0, name === 'Z' ? 0 : 1)
+                .applyQuaternion(frame);
+            direction.addScaledVector(screenUp, -Math.sign(direction.y) * 1e-6).normalize();
+        }
+
+        this.camera.position.copy(this.controls.target).addScaledVector(direction, distance);
+        this.controls.update();
+        this.camera.updateMatrixWorld();
+        this.redraw();
+        return true;
     }
 
     /**
@@ -954,8 +1025,12 @@ export class SceneManager {
             return;
         }
 
-        // Update camera aspect ratio
-        this.camera.aspect = width / height;
+        // Preserve framing along the smaller viewport dimension on rotation
+        // and when a mobile drawer changes the available canvas space.
+        const aspect = width / height;
+        const distanceScale = Math.min(1, this.camera.aspect) / Math.min(1, aspect);
+        this.camera.position.sub(this.controls.target).multiplyScalar(distanceScale).add(this.controls.target);
+        this.camera.aspect = aspect;
         this.camera.updateProjectionMatrix();
 
         // Update renderer size
@@ -976,16 +1051,7 @@ export class SceneManager {
             return;
         }
 
-        // Update camera aspect ratio
-        this.camera.aspect = width / height;
-        this.camera.updateProjectionMatrix();
-
-        // Update renderer size (updateStyle set to true to update canvas style)
-        this.renderer.setSize(width, height, true);
-        this.renderer.setPixelRatio(window.devicePixelRatio);
-
-        // Render immediately to avoid black areas
-        this.render();
+        this.handleResize(width, height);
     }
 
     // ==================== Event System ====================

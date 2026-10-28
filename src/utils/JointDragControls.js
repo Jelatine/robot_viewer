@@ -1,3 +1,4 @@
+import { isScalarJoint } from '../models/UnifiedRobotModel.js';
 import * as THREE from 'three';
 import { MathUtils } from './MathUtils.js';
 
@@ -62,35 +63,15 @@ function findParentJoint(link, model) {
         return null;
     }
 
-    let currentLink = link.threeObject;
-
-    // Search upward, skip fixed joints
-    while (currentLink) {
-        const parentObject = currentLink.parent;
-
-        // If parent object is joint
-        if (parentObject && (parentObject.type === 'URDFJoint' || parentObject.isURDFJoint)) {
-            const jointName = parentObject.name;
-            if (jointName && model.joints.has(jointName)) {
-                const joint = model.joints.get(jointName);
-
-                // If movable joint, return it
-                if (joint.type !== 'fixed') {
-                    return joint;
-                }
-
-                // If fixed joint, continue searching upward
-                // Find this joint's parent link
-                const parentLink = parentObject.parent;
-                if (parentLink && (parentLink.type === 'URDFLink' || parentLink.isURDFLink)) {
-                    currentLink = parentLink;
-                    continue;
-                }
-            }
+    // MJCF inserts body-frame and inverse-pivot groups between a link and
+    // its joint. Walk the actual ancestry, including fixed intermediate links.
+    let current = link.threeObject.parent;
+    while (current) {
+        if (current.isURDFJoint || current.type === 'URDFJoint') {
+            const joint = model.joints.get(current.name);
+            if (isScalarJoint(joint)) return joint;
         }
-
-        // No parent joint or reached root node
-        break;
+        current = current.parent;
     }
 
     return null;

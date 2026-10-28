@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="color-scheme" content="dark light">
     <title>Robot Viewer</title>
     <link rel="icon" type="image/svg+xml" href="./favicon.svg">
@@ -2936,7 +2936,7 @@
     <div id="container">
         <div id="canvas-container">
             <div id="top-control-bar">
-                <div class="control-bar-section">
+                <div class="control-bar-section control-bar-views">
                     <button class="control-button active" id="show-visual" data-checked="true">
                         <span data-i18n="visual"></span>
                     </button>
@@ -2968,7 +2968,7 @@
 
                 <div class="control-bar-divider"></div>
 
-                <div class="control-bar-section">
+                <div class="control-bar-section control-bar-direction">
                     <select id="up-select" class="control-bar-select">
                         <option value="+Z">+Z</option>
                         <option value="-Z">-Z</option>
@@ -2981,7 +2981,7 @@
 
                 <div class="control-bar-divider"></div>
 
-                <div class="control-bar-section">
+                <div class="control-bar-section control-bar-panels">
                     <button class="tool-button active" id="toggle-files-panel">
                         <span class="tool-button-text" data-i18n="files"></span>
                     </button>
@@ -3004,7 +3004,7 @@
 
                 <div class="control-bar-divider"></div>
 
-                <div class="control-bar-section">
+                <div class="control-bar-section control-bar-settings">
                     <button class="tool-button" id="help-button">
                         <span class="tool-button-text" data-i18n="help"></span>
                     </button>

@@ -9,6 +9,7 @@ export class UnifiedRobotModel {
         this.joints = new Map(); // Map<name, Joint>
         this.materials = new Map(); // Map<name, Material>
         this.constraints = new Map(); // Map<name, Constraint> - for parallel mechanism constraints
+        this.sites = new Map(); // Named MJCF frames used by equality constraints
         this.rootLink = null; // Root link name
         this.threeObject = null; // Three.js object (if available)
     }
@@ -82,15 +83,17 @@ export class CollisionGeometry {
  */
 export class GeometryType {
     constructor(type) {
-        this.type = type; // 'box' | 'sphere' | 'cylinder' | 'mesh'
+        this.type = type; // 'plane' | 'box' | 'sphere' | 'cylinder' | 'capsule' | 'mesh'
         this.size = null; // Size parameters (varies by type)
         this.filename = null; // Mesh file path (if mesh type)
+        this.infinite = false; // Infinite primitives should not define camera framing bounds
     }
 
     clone() {
         const cloned = new GeometryType(this.type);
         cloned.size = this.size ? { ...this.size } : null;
         cloned.filename = this.filename;
+        cloned.infinite = this.infinite;
         return cloned;
     }
 }
@@ -124,8 +127,15 @@ export class Joint {
         this.axis = { xyz: [0, 0, 1] }; // Default z-axis
         this.limits = null; // JointLimits
         this.currentValue = 0; // Current joint value
+        this.ref = 0; // MJCF qpos0; spatial displacement is currentValue - ref
+        this.stiffness = 0; // Passive MJCF joint spring, if present
         this.threeObject = null; // Three.js object (if available)
     }
+}
+
+/** Scalar pose controls cannot represent floating or quaternion joints. */
+export function isScalarJoint(joint) {
+    return ['revolute', 'continuous', 'prismatic'].includes(joint?.type);
 }
 
 /**
@@ -165,6 +175,10 @@ export class Constraint {
         this.body2 = null;
         this.anchor = null; // Connection point coordinates
         this.torquescale = null; // Torque scale
+        this.site1 = null;
+        this.site2 = null;
+        this.relpose = null;
+        this.active = true;
 
         // Joint constraint specific properties
         this.joint1 = null;
@@ -178,4 +192,3 @@ export class Constraint {
         this.userData = {};
     }
 }
-

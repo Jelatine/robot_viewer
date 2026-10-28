@@ -1,6 +1,6 @@
 {
   "name": "robot-viewer",
-  "version": "1.3.0",
+  "version": "1.5.0",
   "description": "Web-based robot model viewer supporting URDF, MJCF, and USD formats",
   "type": "module",
   "main": "index.html",
@@ -9,7 +9,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test tests/animation/*.test.js"
+    "test": "node --test tests/animation/*.test.js tests/mjcf/*.test.js"
   },
   "keywords": [
     "robot",
@@ -41,6 +41,7 @@
     "xacro-parser": "^0.3.11"
   },
   "devDependencies": {
+    "linkedom": "0.18.12",
     "terser": "^5.26.0",
     "vite": "^4.5.0"
   }

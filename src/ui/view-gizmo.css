@@ -1,0 +1,102 @@
+.view-gizmo {
+    position: absolute;
+    top: 76px;
+    right: max(16px, env(safe-area-inset-right));
+    width: 120px;
+    height: 120px;
+    z-index: 40;
+    border-radius: 50%;
+    pointer-events: none;
+    user-select: none;
+}
+
+.view-gizmo[hidden] {
+    display: none;
+}
+
+.view-gizmo:hover,
+.view-gizmo:focus-within {
+    background: rgba(128, 128, 128, 0.12);
+}
+
+.view-gizmo svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+.view-gizmo-x { --axis-color: #ff5269; }
+.view-gizmo-y { --axis-color: #99d83b; }
+.view-gizmo-z { --axis-color: #429bff; }
+
+.view-gizmo-line {
+    stroke: var(--axis-color);
+    stroke-width: 1.6;
+    stroke-linecap: round;
+}
+
+.view-gizmo-axis {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    font: 600 11px/1 system-ui, sans-serif;
+    cursor: pointer;
+    pointer-events: auto;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.view-gizmo-axis span {
+    display: grid;
+    place-items: center;
+    box-sizing: border-box;
+    width: 22px;
+    height: 22px;
+    border: 1.5px solid var(--axis-color);
+    border-radius: 50%;
+    background: var(--axis-color);
+    color: #17212c;
+    transition: box-shadow 0.12s, opacity 0.12s;
+}
+
+.view-gizmo-axis.is-negative span {
+    background: var(--bg-primary);
+    color: transparent;
+}
+
+.view-gizmo-axis.is-back span { opacity: 0.5; }
+
+.view-gizmo-axis:hover span,
+.view-gizmo-axis:focus-visible span,
+.view-gizmo-axis[aria-pressed="true"] span {
+    opacity: 1;
+    box-shadow: 0 0 0 2px var(--text-primary);
+}
+
+.view-gizmo-axis.is-negative:hover span,
+.view-gizmo-axis.is-negative:focus-visible span,
+.view-gizmo-axis.is-negative[aria-pressed="true"] span {
+    color: var(--axis-color);
+}
+
+.view-gizmo-axis:focus-visible {
+    outline: 2px solid var(--text-primary);
+    outline-offset: 1px;
+    z-index: 250 !important;
+}
+
+@media (max-width: 1023px) {
+    .view-gizmo {
+        top: 4px;
+        right: max(4px, env(safe-area-inset-right));
+    }
+}
